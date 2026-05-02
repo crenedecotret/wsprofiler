@@ -66,21 +66,19 @@ The executable will be created in the `dist/` directory:
 
 ### Download Pre-built Executables
 
-Pre-built executables for Linux and Windows are automatically built on every commit and available from the [GitHub Actions](https://github.com/crenedecotret/wsprofiler/actions) page.
+**Stable releases** are available on the [Releases](https://github.com/crenedecotret/wsprofiler/releases) page.
 
-**To download the latest executables:**
-
-1. Go to https://github.com/crenedecotret/wsprofiler/actions
-2. Click on the most recent successful workflow run
-3. Download the artifacts at the bottom of the page:
-   - `wsprofiler-linux` - Linux executable (tar.gz)
-   - `wsprofiler-windows` - Windows executable (zip)
-
-**From GitHub Releases** (when published):
-- Check the [Releases](https://github.com/crenedecotret/wsprofiler/releases) page for stable versions
-- Releases are created automatically when you push tags starting with `v` (e.g., `git tag v1.0.0 && git push origin v1.0.0`)
+Each release includes:
+- `wsprofiler-linux.tar.gz` - Linux executable
+- `wsprofiler-windows.zip` - Windows executable
 
 **Note**: The executables bundle Python and PySide6, making them ~50-100MB. Users don't need Python installed to run them.
+
+#### Development Builds (Bleeding Edge)
+
+For the latest builds from every commit, download artifacts from [GitHub Actions](https://github.com/crenedecotret/wsprofiler/actions):
+1. Click the most recent successful workflow run
+2. Download the artifacts at the bottom of the page
 
 ## Features
 
