@@ -64,35 +64,21 @@ The executable will be created in the `dist/` directory:
 - **Linux**: `dist/wsprofiler` (single binary)
 - **Windows**: `dist/wsprofiler.exe` (single executable)
 
-### Automated Builds with GitHub Actions
+### Download Pre-built Executables
 
-This repository includes GitHub Actions workflows that automatically build executables for Linux and Windows on every push to `main`/`master` and for every tag starting with `v`.
+Pre-built executables for Linux and Windows are automatically built on every commit and available from the [GitHub Actions](https://github.com/crenedecotret/wsprofiler/actions) page.
 
-**To set up automated builds:**
+**To download the latest executables:**
 
-1. Create a GitHub repository at https://github.com/new
-   - Repository name: `wsprofiler`
-   - Make it public or private as desired
+1. Go to https://github.com/crenedecotret/wsprofiler/actions
+2. Click on the most recent successful workflow run
+3. Download the artifacts at the bottom of the page:
+   - `wsprofiler-linux` - Linux executable (tar.gz)
+   - `wsprofiler-windows` - Windows executable (zip)
 
-2. Push your code to GitHub:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git branch -M main
-   git remote add origin https://github.com/crenedecotret/wsprofiler.git
-   git push -u origin main
-   ```
-
-3. The GitHub Actions workflows will automatically:
-   - Build Linux executable on every push to `main`/`master`
-   - Build Windows executable on every push to `main`/`master`
-   - Create GitHub Releases with both executables when you push tags like `v1.0.0`
-
-4. **Download executables**:
-   - Go to your repository's **Actions** tab to see build progress
-   - Download artifacts from completed workflows
-   - Or create a release by pushing a tag: `git tag v1.0.0 && git push origin v1.0.0`
+**From GitHub Releases** (when published):
+- Check the [Releases](https://github.com/crenedecotret/wsprofiler/releases) page for stable versions
+- Releases are created automatically when you push tags starting with `v` (e.g., `git tag v1.0.0 && git push origin v1.0.0`)
 
 **Note**: The executables bundle Python and PySide6, making them ~50-100MB. Users don't need Python installed to run them.
 
