@@ -1,0 +1,57 @@
+name: Build Linux Executable
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y upx-ucl
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[build]"
+    
+    - name: Build executable with PyInstaller
+      run: |
+        pyinstaller wsprofiler.spec --clean --noconfirm
+    
+    - name: Package executable
+      run: |
+        cd dist
+        tar -czf wsprofiler-linux.tar.gz wsprofiler
+        ls -la
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wsprofiler-linux
+        path: dist/wsprofiler-linux.tar.gz
+    
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/wsprofiler-linux.tar.gz
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

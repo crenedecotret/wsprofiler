@@ -1,0 +1,2 @@
+[console_scripts]
+wsprofiler = wsprofiler.__main__:main

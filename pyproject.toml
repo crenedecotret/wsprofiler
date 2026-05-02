@@ -1,0 +1,31 @@
+[project]
+name = "wsprofiler"
+version = "0.1.0"
+description = "PySide6 GUI wrapper for ArgyllCMS chartread pipeline"
+authors = [
+  { name = "Cascade" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PySide6>=6.6",
+  "pywin32>=227; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.0",
+]
+build = [
+  "pyinstaller>=6.0",
+]
+
+[project.scripts]
+wsprofiler = "wsprofiler.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "wsprofiler"}
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
