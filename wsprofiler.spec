@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 import sys
 from pathlib import Path
 
 block_cipher = None
 
 # Get the project root directory
-project_root = Path(SPECDIR).resolve()
+project_root = Path(os.path.dirname(SPEC)).resolve()
 
 # Determine platform-specific settings
 is_windows = sys.platform.startswith('win')
