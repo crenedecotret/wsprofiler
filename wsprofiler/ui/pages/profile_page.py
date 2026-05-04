@@ -241,6 +241,65 @@ class ProfilePage(QWidget):
 
     profileGenerated = Signal(Path)
 
+    # ---- programmatic API for wizard-driven operation ---------------------
+    def set_automatic_config(
+        self,
+        ti3_path: Path | str | None = None,
+        quality: str | None = None,
+        smoothing: float | None = None,
+        gamut_path: Path | str | None = None,
+        clear_gamut: bool = False,
+        description: str | None = None,
+        auto_start: bool = False,
+    ) -> None:
+        """Configure the page without user interaction.
+
+        Parameters
+        ----------
+        ti3_path : Path or str, optional
+            Path to the measurement file.
+        quality : str, optional
+            ``"l"``, ``"m"``, or ``"h"``.
+        smoothing : float, optional
+            Smoothing factor (``-r`` parameter).
+        gamut_path : Path or str, optional
+            Path to gamut mapping reference profile.
+        clear_gamut : bool
+            If True, clear gamut mapping selection (no ``-S`` flag).
+        description : str, optional
+            Profile description string (``-D``).
+        auto_start : bool
+            If True, immediately start profile generation.
+        """
+        if ti3_path is not None:
+            self.ti3_edit.setText(str(ti3_path))
+        if quality is not None:
+            idx = self.quality_combo.findData(quality)
+            if idx >= 0:
+                self.quality_combo.setCurrentIndex(idx)
+        if smoothing is not None:
+            self.smoothing_spin.setValue(smoothing)
+        if clear_gamut:
+            self.ref_combo.setCurrentIndex(-1)
+        elif gamut_path is not None:
+            p = str(gamut_path)
+            existing = self.ref_combo.findData(p)
+            if existing >= 0:
+                self.ref_combo.setCurrentIndex(existing)
+            else:
+                desc = _read_icc_description(Path(p))
+                display_text = f"{Path(p).name} — {desc}" if desc else Path(p).name
+                self.ref_combo.addItem(display_text, p)
+                self.ref_combo.setCurrentIndex(self.ref_combo.count() - 1)
+        if description is not None:
+            self.desc_edit.setText(description)
+        if auto_start:
+            self._on_generate()
+
+    def trigger_generate(self) -> None:
+        """Programmatic start of profile creation."""
+        self._on_generate()
+
     def __init__(self, workspace: Path, parent=None) -> None:
         super().__init__(parent)
         self.workspace = workspace

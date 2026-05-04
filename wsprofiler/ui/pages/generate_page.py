@@ -65,6 +65,52 @@ class GeneratePage(QWidget):
 
     chartGenerated = Signal(Path)
 
+    # ---- programmatic API for wizard-driven operation ---------------------
+    def set_automatic_config(
+        self,
+        device: str | None = None,
+        paper: str | None = None,
+        precond_path: Path | str | None = None,
+        target_path: Path | str | None = None,
+        auto_start: bool = False,
+    ) -> None:
+        """Configure the page without user interaction.
+
+        Parameters
+        ----------
+        device : str, optional
+            Instrument code (``"i1"``, ``"3p"``, ``"CM"``).
+        paper : str, optional
+            Paper code (``"A4"``, ``"Letter"``, …).
+        precond_path : Path or str, optional
+            Path to preconditioning ICC profile.
+        target_path : Path or str, optional
+            Target folder/file stem (e.g. ``/tmp/mytarget``).
+        auto_start : bool
+            If True, immediately start generation.
+        """
+        if device is not None:
+            idx = self.instrument_combo.findData(device)
+            if idx >= 0:
+                self.instrument_combo.setCurrentIndex(idx)
+        if paper is not None:
+            idx = self.paper_combo.findData(paper)
+            if idx >= 0:
+                self.paper_combo.setCurrentIndex(idx)
+        if precond_path is not None:
+            p = str(precond_path)
+            self.precond_check.setChecked(True)
+            self.precond_path.setText(p)
+        if target_path is not None:
+            self.target_edit.setText(str(target_path))
+
+        if auto_start:
+            self._on_generate()
+
+    def trigger_generate(self) -> None:
+        """Programmatic start of chart generation (same as clicking Generate)."""
+        self._on_generate()
+
     def __init__(self, workspace: Path, parent=None) -> None:
         super().__init__(parent)
         self.workspace = workspace

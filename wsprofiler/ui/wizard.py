@@ -7,13 +7,16 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPushButton,
     QStackedWidget,
+    QVBoxLayout,
     QWidget,
 )
 
 from .pages.generate_page import GeneratePage
 from .pages.measurement_page import MeasurementPage
 from .pages.profile_page import ProfilePage
+from .two_step_dialog import TwoStepWizardDialog
 
 
 class Wizard(QWidget):
@@ -27,10 +30,25 @@ class Wizard(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # --- left sidebar: step list + two-step button --------------------
+        left = QWidget()
+        left.setFixedWidth(180)
+        left_lyt = QVBoxLayout(left)
+        left_lyt.setContentsMargins(0, 0, 0, 0)
+        left_lyt.setSpacing(4)
+
         self.steps = QListWidget()
-        self.steps.setFixedWidth(180)
         self.steps.setAlternatingRowColors(True)
-        layout.addWidget(self.steps)
+        left_lyt.addWidget(self.steps)
+
+        self.two_step_btn = QPushButton("Two-Step\nProfile Wizard")
+        self.two_step_btn.setStyleSheet(
+            "QPushButton { padding: 8px 12px; font-weight: bold; }"
+        )
+        left_lyt.addWidget(self.two_step_btn)
+
+        layout.addWidget(left)
+        # -----------------------------------------------------------------
 
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, stretch=1)
@@ -51,6 +69,12 @@ class Wizard(QWidget):
         self._pending_ti2: Path | None = None
         self._pages["Generate"].chartGenerated.connect(self._on_chart_generated)
         self._pages["Measure"].measurementsComplete.connect(self._on_measurements_complete)
+
+        self.two_step_btn.clicked.connect(self._open_two_step_wizard)
+
+    def _open_two_step_wizard(self) -> None:
+        dlg = TwoStepWizardDialog(workspace=self.workspace, parent=self)
+        dlg.exec()
 
     def _on_chart_generated(self, ti2_path: Path) -> None:
         self._pending_ti2 = ti2_path
