@@ -424,6 +424,10 @@ class GeneratePage(QWidget):
             "printtarg": str(self._install.printtarg),
         }[step_name]
 
+        if self._proc:
+            self._proc.kill()
+            self._proc = None
+
         self._proc = QProcess(self)
         self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self._proc.setWorkingDirectory(self._work_dir)

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QProgressBar,
     QVBoxLayout,
     QWidget,
 )
@@ -85,6 +86,14 @@ def _find_adobe_rgb_profile() -> Path | None:
         Path("/usr/local/share/color"),
         Path("/opt"),
     ]
+
+    if os.name == "nt":
+        # Windows system and user profiles
+        sys_root = os.environ.get("SystemRoot", "C:\\Windows")
+        search_paths.extend([
+            Path(sys_root) / "System32" / "spool" / "drivers" / "color",
+            Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Color Profiles",
+        ])
     
     # First check specific profile files in known locations
     for base in search_paths:
@@ -133,6 +142,14 @@ def _find_srgb_profile() -> Path | None:
         Path("/usr/local/share/color"),
         Path("/opt"),
     ]
+
+    if os.name == "nt":
+        # Windows system and user profiles
+        sys_root = os.environ.get("SystemRoot", "C:\\Windows")
+        search_paths.extend([
+            Path(sys_root) / "System32" / "spool" / "drivers" / "color",
+            Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Color Profiles",
+        ])
     
     # First check specific profile files in known locations
     for base in search_paths:
@@ -215,7 +232,7 @@ def _read_icc_description(path: Path) -> str | None:
                     ascii_str = data[tag_offset + 12 : tag_offset + 12 + ascii_count - 1]
                     return ascii_str.decode("ascii", "replace").strip()
         return None
-    except Exception:
+    except (OSError, UnicodeDecodeError, ValueError):
         return None
 
 
@@ -321,8 +338,15 @@ class ProfilePage(QWidget):
         self.generate_btn = QPushButton("Create Profile")
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setVisible(False)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFixedWidth(120)
+        self.progress_bar.setVisible(False)
+        
         button_row.addWidget(self.generate_btn)
         button_row.addWidget(self.cancel_btn)
+        button_row.addWidget(self.progress_bar)
         button_row.addStretch()
         root.addLayout(button_row)
 
@@ -517,6 +541,10 @@ class ProfilePage(QWidget):
 
         args = self._build_args(name)
 
+        if self._proc:
+            self._proc.kill()
+            self._proc = None
+
         self._proc = QProcess(self)
         self._proc.setProcessChannelMode(
             QProcess.ProcessChannelMode.MergedChannels
@@ -529,9 +557,10 @@ class ProfilePage(QWidget):
             f"{' '.join(shlex.quote(a) for a in args)}"
         )
         self._proc.start(str(self._install.colprof), args)
-
+        
         self.generate_btn.setVisible(False)
         self.cancel_btn.setVisible(True)
+        self.progress_bar.setVisible(True)
 
     def _on_proc_stdout(self) -> None:
         if not self._proc:
@@ -547,6 +576,7 @@ class ProfilePage(QWidget):
         self._proc = None
         self.generate_btn.setVisible(True)
         self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
         if code == 0:
             ti3_path = Path(self.ti3_edit.text().strip())
             name = self._get_profile_name()
@@ -560,3 +590,4 @@ class ProfilePage(QWidget):
         self.console.append_line("Cancelled.")
         self.generate_btn.setVisible(True)
         self.cancel_btn.setVisible(False)
+        self.progress_bar.setVisible(False)
