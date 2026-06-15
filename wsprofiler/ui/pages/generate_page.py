@@ -138,7 +138,7 @@ class GeneratePage(QWidget):
 
         target_row = QHBoxLayout()
         self.target_edit = QLineEdit(str(workspace / "mytarget"))
-        self.target_edit.setStyleSheet("background-color: white;")
+
         self.target_browse = QPushButton("Browse\u2026")
         target_row.addWidget(self.target_edit, stretch=1)
         target_row.addWidget(self.target_browse)
@@ -190,11 +190,11 @@ class GeneratePage(QWidget):
         layout_form.addRow("Paper size:", self.paper_combo)
 
         self.pages_spin = self._make_spin(1, 50, 1)
-        self.pages_spin.setStyleSheet("background-color: white;")
+
         layout_form.addRow("Number of pages:", self.pages_spin)
 
         self.summary_label = QLabel()
-        self.summary_label.setStyleSheet("color: #555; font-style: italic;")
+        self.summary_label.setStyleSheet("color: #8a8ea0; font-style: italic;")
         layout_form.addRow("", self.summary_label)
 
         root.addWidget(layout_group)
@@ -210,7 +210,7 @@ class GeneratePage(QWidget):
         precond_row = QHBoxLayout()
         self.precond_check = QCheckBox("Preconditioning profile")
         self.precond_path = QLineEdit()
-        self.precond_path.setStyleSheet("background-color: white;")
+
         self.precond_browse = QPushButton("Browse\u2026")
         precond_row.addWidget(self.precond_check)
         precond_row.addWidget(self.precond_path, stretch=1)

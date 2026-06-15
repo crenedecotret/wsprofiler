@@ -328,7 +328,7 @@ class ProfilePage(QWidget):
 
         ti3_row = QHBoxLayout()
         self.ti3_edit = QLineEdit()
-        self.ti3_edit.setStyleSheet("background-color: white;")
+
         self.ti3_browse = QPushButton("Browse\u2026")
         ti3_row.addWidget(self.ti3_edit, stretch=1)
         ti3_row.addWidget(self.ti3_browse)
@@ -387,7 +387,7 @@ class ProfilePage(QWidget):
         name_form.setContentsMargins(8, 4, 8, 4)
 
         self.desc_edit = QLineEdit()
-        self.desc_edit.setStyleSheet("background-color: white;")
+
         name_form.addRow("Profile description:", self.desc_edit)
 
         root.addWidget(name_group)

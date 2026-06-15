@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 from .pages.generate_page import _PATCHES_PER_PAGE
 from .pages.measurement_page import MeasurementPage
 from .pages.profile_page import _find_adobe_rgb_profile, _find_argyll_ref_dir, _list_ref_profiles, _read_icc_description
+from .process_chain import ProcessChain, ProcessStep
 from ..argyll import discover
 from ..ti import ti3_combiner
 
@@ -137,6 +138,7 @@ class TwoStepWizardDialog(QDialog):
         ]
 
         self._proc: Optional[list[str]] = None  # track running step name
+        self._chain: Optional[ProcessChain] = None
 
         # guard against duplicate signal connections
         self._meas1_connected = False
@@ -225,7 +227,7 @@ class TwoStepWizardDialog(QDialog):
         form.addRow("Paper:", self._paper_combo)
 
         self._target_edit = QLineEdit(str(self.workspace / "target"))
-        self._target_edit.setStyleSheet("background-color: white;")
+
         browse_btn = QPushButton("Browse…")
         browse_btn.clicked.connect(self._browse_target)
         target_row = QHBoxLayout()
@@ -234,7 +236,7 @@ class TwoStepWizardDialog(QDialog):
         form.addRow("Target:", target_row)
 
         self._summary_label = QLabel()
-        self._summary_label.setStyleSheet("color: #555; font-style: italic;")
+        self._summary_label.setStyleSheet("color: #8a8ea0; font-style: italic;")
         form.addRow("", self._summary_label)
 
         self._instr_combo.currentIndexChanged.connect(self._update_paper_options)
@@ -489,6 +491,9 @@ class TwoStepWizardDialog(QDialog):
 
     def _on_cancel(self) -> None:
         self._cancelled = True
+        if self._chain is not None and self._chain.is_running():
+            self._chain.cancel()
+            self._chain = None
         if self._proc is not None:
             self._proc.kill()
             self._proc = None
@@ -509,21 +514,9 @@ class TwoStepWizardDialog(QDialog):
 
     # --------------------------------------------------- generate step 1
 
-    def _make_proc(self, exe: Path, args: list[str], work_dir: str,
-                   on_finished, console: QPlainTextEdit):
-        from PySide6.QtCore import QProcess
-        proc = QProcess(self)
-        proc.setWorkingDirectory(work_dir)
-        proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        proc.finished.connect(on_finished)
-        proc.readyReadStandardOutput.connect(
-            lambda p=proc, c=console: self._capture_stdout(p, c)
-        )
-        proc.start(str(exe), args)
-        return proc
-
     @staticmethod
     def _capture_stdout(proc, console: QPlainTextEdit) -> None:
+        """Capture stdout to console (used by auto-processing chains)."""
         data = bytes(proc.readAllStandardOutput()).decode("utf-8", "ignore")
         for line in data.splitlines():
             console.appendPlainText(line)
@@ -531,6 +524,8 @@ class TwoStepWizardDialog(QDialog):
     def _on_generate(self) -> None:
         """Run targen + printtarg for the first chart."""
         if not self._install:
+            return
+        if self._chain is not None and self._chain.is_running():
             return
 
         target = Path(self._target_edit.text().strip())
@@ -590,49 +585,36 @@ class TwoStepWizardDialog(QDialog):
         cmd1 = f"{self._install.targen} {' '.join(shlex.quote(a) for a in targen_args)}"
         self._gen_console.appendPlainText(f"$ {cmd1}")
 
-        from PySide6.QtCore import QProcess
-        self._proc = QProcess(self)
-        self._proc.setWorkingDirectory(work_dir)
-        self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-
-        self._pending_printtarg_args = printtarg_args
-
-        self._proc.finished.connect(self._on_targen_done)
-        self._proc.readyReadStandardOutput.connect(
-            lambda p=self._proc, c=self._gen_console: self._capture_stdout(p, c)
+        self._chain = ProcessChain(self)
+        self._chain.set_error_handler(
+            lambda msg: self._on_chain_error(msg, self._gen_console)
         )
-        self._proc.start(str(self._install.targen), targen_args)
+        self._chain.set_completion_handler(self._on_generate_done)
 
-    def _on_targen_done(self, code: int) -> None:
-        if code != 0:
-            self._gen_console.appendPlainText(f"\ntargen failed (exit {code})")
-            self._generate_btn.setEnabled(True)
-            self._generate_btn.setText("Generate")
-            self._proc = None
-            return
+        self._chain.add_step(ProcessStep(
+            exe=self._install.targen,
+            args=targen_args,
+            work_dir=work_dir,
+            on_finished=lambda code: None,
+            console=self._gen_console,
+        ))
+        self._chain.add_step(ProcessStep(
+            exe=self._install.printtarg,
+            args=printtarg_args,
+            work_dir=work_dir,
+            on_finished=lambda code: None,
+            console=self._gen_console,
+        ))
+        self._chain.start()
 
-        self._gen_console.appendPlainText("\ntargen OK, running printtarg…")
-        from PySide6.QtCore import QProcess
-        printtarg = str(self._install.printtarg)
-        cmd2 = f"{printtarg} {' '.join(shlex.quote(a) for a in self._pending_printtarg_args)}"
-        self._gen_console.appendPlainText(f"$ {cmd2}")
+    def _on_chain_error(self, msg: str, console: QPlainTextEdit) -> None:
+        """Handle a chain step failure."""
+        console.appendPlainText(f"\n{msg}")
+        self._generate_btn.setEnabled(True)
+        self._generate_btn.setText("Generate")
 
-        self._proc.finished.disconnect()
-        self._proc.finished.connect(self._on_printtarg_done)
-        self._proc.readyReadStandardOutput.disconnect()
-        self._proc.readyReadStandardOutput.connect(
-            lambda p=self._proc, c=self._gen_console: self._capture_stdout(p, c)
-        )
-        self._proc.start(printtarg, self._pending_printtarg_args)
-
-    def _on_printtarg_done(self, code: int) -> None:
-        self._proc = None
-        if code != 0:
-            self._gen_console.appendPlainText(f"\nprinttarg failed (exit {code})")
-            self._generate_btn.setEnabled(True)
-            self._generate_btn.setText("Generate")
-            return
-
+    def _on_generate_done(self) -> None:
+        """Handle successful completion of generate chain."""
         target = Path(self._target_edit.text().strip())
         ti2_path = target.with_suffix(".ti2")
         self._chart1_ti2 = ti2_path
