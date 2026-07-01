@@ -15,7 +15,9 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal, QProcess
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...argyll import discover
+from ...profiling.pass2_generator import max_selectable_patches
 from ...ti import ti3_combiner
 from ..log_console import LogConsole
 from ..session_controller import SimpleSessionController, find_tiff_pages
@@ -181,17 +184,65 @@ class OptimisePage(QWidget):
         self._status_label.setStyleSheet("font-size: 14px;")
         layout.addWidget(self._status_label)
 
-        # Patch count control
-        patch_count_row = QWidget()
-        patch_count_layout = QHBoxLayout(patch_count_row)
-        patch_count_layout.setContentsMargins(0, 0, 0, 0)
-        patch_count_layout.addWidget(QLabel("Optimisation patches:"))
-        self._patch_count_spin = QSpinBox()
-        self._patch_count_spin.setRange(50, 1000)
-        self._patch_count_spin.setValue(400)
-        patch_count_layout.addWidget(self._patch_count_spin)
-        patch_count_layout.addStretch()
-        layout.addWidget(patch_count_row)
+        # --- Chart settings (mirror GeneratePage) ------------------------
+        chart_group = QGroupBox("")
+        chart_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        chart_form = QFormLayout(chart_group)
+        chart_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self._instr_combo = QComboBox()
+        for code, label in [
+            ("i1", "i1Pro (i1)"),
+            ("3p", "i1Pro3+ (3p)"),
+            ("CM", "ColorMunki (CM)"),
+        ]:
+            self._instr_combo.addItem(label, code)
+        chart_form.addRow("Instrument:", self._instr_combo)
+
+        self._dd_check = QCheckBox("Double density (-h, ColorMunki only)")
+        self._dd_check.setChecked(False)
+        self._dd_check.setVisible(False)
+        self._nb_check = QCheckBox("Suppress left paperclip border (-L, i1Pro only)")
+        self._nb_check.setChecked(False)
+        self._nb_check.setVisible(False)
+        self._options_row = QWidget()
+        options_layout = QHBoxLayout(self._options_row)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        self._options_placeholder = QLabel("")
+        self._options_placeholder.setMinimumHeight(self._dd_check.sizeHint().height())
+        self._options_placeholder.setVisible(False)
+        options_layout.addWidget(self._options_placeholder)
+        options_layout.addWidget(self._dd_check)
+        options_layout.addWidget(self._nb_check)
+        options_layout.addStretch()
+        chart_form.addRow("", self._options_row)
+
+        self._paper_combo = QComboBox()
+        for code, desc in [
+            ("A4",      "A4  [210 x 297 mm]"),
+            ("A4R",     "A4R  [297 x 210 mm]"),
+            ("A3",      "A3  [297 x 420 mm]"),
+            ("A3+",     "A3+/SuperB  [483 x 329 mm]"),
+            ("A2",      "A2  [420 x 594 mm]"),
+            ("Letter",  "Letter  [215.9 x 279.4 mm]"),
+            ("LetterR", "LetterR  [279.4 x 215.9 mm]"),
+            ("Legal",   "Legal  [215.9 x 355.6 mm]"),
+            ("4x6",     "4x6  [101.6 x 152.4 mm]"),
+            ("11x17",   "11x17  [279.4 x 431.8 mm]"),
+        ]:
+            self._paper_combo.addItem(desc, code)
+        chart_form.addRow("Paper size:", self._paper_combo)
+
+        self._pages_spin = QSpinBox()
+        self._pages_spin.setRange(1, 5)
+        self._pages_spin.setValue(1)
+        chart_form.addRow("Number of pages:", self._pages_spin)
+
+        self._summary_label = QLabel()
+        self._summary_label.setStyleSheet("color: #8a8ea0; font-style: italic;")
+        chart_form.addRow("", self._summary_label)
+
+        layout.addWidget(chart_group)
 
         self._generate_addon_btn = QPushButton("Generate Add-on Chart")
         self._generate_addon_btn.setStyleSheet("font-weight: bold; min-height: 36px;")
@@ -228,6 +279,13 @@ class OptimisePage(QWidget):
         layout.addWidget(settings_group)
         layout.addStretch(1)
         self._stack.insertWidget(self.STATE_READY, page)
+
+        # --- Wiring ------------------------------------------------------
+        self._instr_combo.currentIndexChanged.connect(self._on_instr_changed)
+        self._paper_combo.currentIndexChanged.connect(self._update_summary)
+        self._pages_spin.valueChanged.connect(self._update_summary)
+        self._dd_check.toggled.connect(self._update_summary)
+        self._nb_check.toggled.connect(self._update_summary)
 
     def _setup_generating_page(self) -> None:
         page = QWidget()
@@ -383,18 +441,76 @@ class OptimisePage(QWidget):
 
     # ----------------------------------------------------------- status
 
+    def _on_instr_changed(self) -> None:
+        instr = self._instr_combo.currentData() or "i1"
+        self._dd_check.setVisible(instr == "CM")
+        self._nb_check.setVisible(instr == "i1")
+        self._options_placeholder.setVisible(instr not in ("CM", "i1"))
+        self._update_summary()
+
+    def _update_summary(self) -> None:
+        from .generate_page import _PATCHES_PER_PAGE
+        instr = self._instr_combo.currentData() or "i1"
+        paper = self._paper_combo.currentData() or "A3"
+        dd = self._dd_check.isChecked() and instr == "CM"
+        nb = self._nb_check.isChecked() and instr == "i1"
+        ppg = _PATCHES_PER_PAGE.get((instr, paper, dd, nb), 400)
+
+        # Cap pages spinbox so total never exceeds candidate pool
+        pool_max = max_selectable_patches()
+        max_pages = max(1, pool_max // ppg)
+        if self._pages_spin.maximum() != max_pages:
+            self._pages_spin.setMaximum(max_pages)
+        if self._pages_spin.value() > max_pages:
+            self._pages_spin.setValue(max_pages)
+
+        pages = self._pages_spin.value()
+        total = ppg * pages
+
+        # White/black/gray counts (same logic as generate_page)
+        if paper == "4x6":
+            detail = "Auto white/black (targen defaults)"
+        else:
+            white = 4 + 2 * (pages - 1)
+            black = 4 + 2 * (pages - 1)
+            gray = self._default_gray_count(instr, paper, pages)
+            detail = f"{white} white, {black} black"
+            if gray:
+                detail += f", {gray} gray"
+
+        self._summary_label.setText(f"≈ {total} total patches ({ppg}/page) · {detail}")
+
+    def _default_gray_count(self, instrument: str, paper: str, pages: int = 1) -> int:
+        if paper in ("A3+", "A2") and instrument not in ("CM", "3p"):
+            return 128
+        if instrument in ("CM", "3p"):
+            if paper in ("A3", "A3+", "A2"):
+                return 51 if pages == 1 else 128
+            return 21 if pages == 1 else 51
+        return 51 if pages == 1 else 128
+
     def _update_ready_status(self) -> None:
         pass_count = len(self._optimisation_passes)
         latest_icc = self._latest_icc_path()
         if pass_count == 0:
             text = "Original profile ready. Ready to generate first add-on chart."
+            # Seed chart settings from the original generation config
             instr = self._generate_config.get("device", "i1")
             paper = self._generate_config.get("paper", "A3")
             dd = self._generate_config.get("double_density", False)
             nb = self._generate_config.get("no_border", False)
-            from .generate_page import _PATCHES_PER_PAGE
-            default = _PATCHES_PER_PAGE.get((instr, paper, dd, nb), 400)
-            self._patch_count_spin.setValue(default)
+
+            idx = self._instr_combo.findData(instr)
+            if idx >= 0:
+                self._instr_combo.setCurrentIndex(idx)
+            self._dd_check.setChecked(dd)
+            self._nb_check.setChecked(nb)
+
+            idx = self._paper_combo.findData(paper)
+            if idx >= 0:
+                self._paper_combo.setCurrentIndex(idx)
+            self._pages_spin.setValue(1)
+            self._update_summary()
         else:
             text = (
                 f"{pass_count} optimisation pass(es) complete.\n"
@@ -468,7 +584,27 @@ class OptimisePage(QWidget):
         pass1_ti3 = Path(str(pass1_ti3))
 
         target = self._pass_target_stem(pass_num)
-        target_n = self._patch_count_spin.value()
+
+        # Compute target_n from chart settings (mirror GeneratePage)
+        instr = self._instr_combo.currentData() or "i1"
+        paper = self._paper_combo.currentData() or "A3"
+        pages = self._pages_spin.value()
+        dd = self._dd_check.isChecked() and instr == "CM"
+        nb = self._nb_check.isChecked() and instr == "i1"
+        from .generate_page import _PATCHES_PER_PAGE
+        ppg = _PATCHES_PER_PAGE.get((instr, paper, dd, nb), 400)
+        target_n = ppg * pages
+
+        pool_max = max_selectable_patches()
+        if target_n > pool_max:
+            QMessageBox.warning(
+                self,
+                "Too many patches",
+                f"The selected patch count ({target_n}) exceeds the maximum "
+                f"available candidates ({pool_max}).\n\n"
+                f"Please reduce the number of pages or choose a smaller paper size.",
+            )
+            return
         out_ti1 = target.with_suffix(".ti1")
 
         self._gen_status.setText("Generating add-on chart…")
@@ -476,12 +612,6 @@ class OptimisePage(QWidget):
         self._console.clear()
         self._show_console_check.setVisible(True)
         self._show_console_check.setChecked(True)
-
-        # Build printtarg args (same as before)
-        instr = self._generate_config.get("device", "i1")
-        paper = self._generate_config.get("paper", "A3")
-        dd = self._generate_config.get("double_density", False)
-        nb = self._generate_config.get("no_border", False)
 
         printtarg_args = ["-v", f"-i{instr}", "-t300"]
         if dd:

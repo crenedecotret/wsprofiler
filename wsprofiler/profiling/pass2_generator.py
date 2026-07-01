@@ -118,42 +118,88 @@ class Candidate:
 
 
 _PERCEPTUAL_ANCHORS: list[tuple[float, float, float]] = [
-    # skin tones
+    # ---- skin tones (pale → dark, warm → cool) ----
+    # Very pale / highlight
+    (0.980, 0.910, 0.840),
+    (0.950, 0.870, 0.780),
+    # Light / Caucasian
     (0.937, 0.796, 0.678),
+    (0.910, 0.750, 0.620),
+    (0.880, 0.700, 0.580),
+    # Medium / Asian / Latino
     (0.847, 0.667, 0.490),
+    (0.800, 0.600, 0.420),
+    (0.780, 0.580, 0.400),
+    # Medium-dark
     (0.706, 0.490, 0.329),
+    (0.650, 0.450, 0.300),
+    (0.600, 0.400, 0.280),
+    # Dark / African
     (0.549, 0.337, 0.180),
+    (0.480, 0.300, 0.160),
+    (0.420, 0.260, 0.140),
+    # Deep shadow
     (0.376, 0.196, 0.082),
-    # foliage greens
-    (0.200, 0.400, 0.098),
-    (0.302, 0.545, 0.161),
-    (0.133, 0.318, 0.043),
-    (0.502, 0.659, 0.290),
-    # sky blues
-    (0.482, 0.694, 0.878),
-    (0.200, 0.522, 0.769),
-    (0.075, 0.353, 0.600),
-    # neutral grays (calibration anchors)
-    (0.125, 0.125, 0.125),
-    (0.250, 0.250, 0.250),
-    (0.375, 0.375, 0.375),
-    (0.500, 0.500, 0.500),
-    (0.625, 0.625, 0.625),
-    (0.750, 0.750, 0.750),
-    (0.875, 0.875, 0.875),
-    # ink-limit / saturated primaries
-    (1.000, 0.000, 0.000),
-    (0.000, 1.000, 0.000),
-    (0.000, 0.000, 1.000),
-    (1.000, 1.000, 0.000),
-    (0.000, 1.000, 1.000),
-    (1.000, 0.000, 1.000),
-    # common print neutrals / memory colors
-    (0.804, 0.361, 0.361),  # warm red
-    (0.200, 0.400, 0.600),  # steel blue
-    (0.400, 0.600, 0.200),  # fresh green
-    (0.600, 0.200, 0.400),  # wine
-    (0.867, 0.753, 0.341),  # gold/ochre
+    (0.300, 0.160, 0.080),
+    # Cool / ruddy skin
+    (0.850, 0.720, 0.680),
+    (0.750, 0.600, 0.550),
+    # Warm / golden skin
+    (0.900, 0.780, 0.650),
+    (0.820, 0.680, 0.520),
+    # ---- foliage greens ----
+    (0.200, 0.400, 0.098),   # deep forest
+    (0.133, 0.318, 0.043),   # dark pine
+    (0.302, 0.545, 0.161),   # mid green
+    (0.502, 0.659, 0.290),   # spring green
+    (0.650, 0.780, 0.350),   # yellow-green / new leaf
+    (0.450, 0.600, 0.200),   # olive
+    (0.350, 0.500, 0.150),   # moss
+    (0.250, 0.420, 0.120),   # dark olive
+    (0.600, 0.750, 0.300),   # lime / bright foliage
+    (0.180, 0.350, 0.080),   # very dark green
+    # ---- sky / water blues ----
+    (0.482, 0.694, 0.878),   # clear sky
+    (0.200, 0.522, 0.769),   # deep sky
+    (0.075, 0.353, 0.600),   # dark blue
+    (0.650, 0.820, 0.950),   # pale sky / haze
+    (0.350, 0.600, 0.800),   # overcast
+    (0.150, 0.450, 0.650),   # twilight
+    (0.550, 0.750, 0.850),   # cyan / water
+    (0.300, 0.550, 0.700),   # deep water
+    # ---- earth / wood / browns ----
+    (0.600, 0.400, 0.250),   # light brown / tan
+    (0.500, 0.320, 0.180),   # medium brown
+    (0.400, 0.250, 0.120),   # dark brown
+    (0.300, 0.180, 0.080),   # very dark brown
+    (0.700, 0.550, 0.400),   # sand / beige
+    (0.550, 0.420, 0.280),   # sienna
+    (0.750, 0.600, 0.450),   # warm tan
+    (0.450, 0.350, 0.220),   # raw umber
+    (0.650, 0.500, 0.350),   # light wood / oak
+    (0.350, 0.250, 0.150),   # dark wood / walnut
+    (0.800, 0.650, 0.500),   # pale wood / birch
+    (0.250, 0.200, 0.120),   # ebony / dark wood
+    # ---- flowers / accent colours ----
+    (0.900, 0.500, 0.600),   # pink / rose
+    (0.850, 0.400, 0.500),   # magenta / fuchsia
+    (0.950, 0.700, 0.750),   # light pink
+    (0.700, 0.300, 0.400),   # deep rose / burgundy
+    (0.950, 0.600, 0.300),   # orange / marigold
+    (0.900, 0.750, 0.400),   # yellow / daffodil
+    (0.600, 0.300, 0.600),   # purple / lavender
+    (0.500, 0.200, 0.500),   # deep purple
+    (0.850, 0.600, 0.200),   # ochre / amber
+    (0.700, 0.500, 0.300),   # rust / terracotta
+    # ---- saturated primaries (gamut reference) ----
+    (1.000, 0.000, 0.000),   # pure red
+    (0.000, 1.000, 0.000),   # pure green
+    (0.000, 0.000, 1.000),   # pure blue
+    (1.000, 1.000, 0.000),   # pure yellow
+    (0.000, 1.000, 1.000),   # pure cyan
+    (1.000, 0.000, 1.000),   # pure magenta
+    (0.900, 0.900, 0.900),   # near-white
+    (0.050, 0.050, 0.050),   # near-black
 ]
 
 
@@ -172,9 +218,9 @@ def _halton(n: int, base: int) -> np.ndarray:
 
 
 def build_candidate_pool(
-    grid: int = 6,
-    halton_n: int = 1024,
-    neutrals: int = 33,
+    grid: int = 5,
+    halton_n: int = 128,
+    neutrals: int = 65,
     edge_steps: int = 17,
     include_anchors: bool = True,
 ) -> list[Candidate]:
@@ -225,15 +271,22 @@ def build_candidate_pool(
         _add(hR[i], hG[i], hB[i], "halton", {"kind": "halton"})
 
     # --- neutral axis with chromatic perturbations ---
+    # Near-neutrals: visible directional offsets around each gray step.
+    # ±0.08 produces visible chromatic casts (warm, cool, greenish, etc.)
+    # while still reading as "near-neutral". The 2-combo perturbations
+    # capture mixed casts (e.g. warm + reduced G/B). All variants are
+    # distinct enough to survive min_dE=2.5 across the full tonal range.
     gray_step = 1.0 / (neutrals - 1) if neutrals > 1 else 1.0
     perturbs = [
-        (0.0, 0.0, 0.0),
-        (+0.01, -0.01, 0.0),
-        (-0.01, +0.01, 0.0),
-        (0.0, +0.01, -0.01),
-        (0.0, -0.01, +0.01),
-        (+0.02, 0.0, -0.02),
-        (-0.02, 0.0, +0.02),
+        (0.0, 0.0, 0.0),          # perfect gray
+        (+0.08, 0.0, 0.0),        # warm   (excess red)
+        (-0.08, 0.0, 0.0),        # cool   (less red)
+        (0.0, +0.08, 0.0),        # greenish
+        (0.0, -0.08, 0.0),        # magenta-ish
+        (0.0, 0.0, +0.08),        # bluish
+        (0.0, 0.0, -0.08),        # yellowish
+        (+0.10, -0.05, -0.05),    # warm + reduced G/B
+        (-0.05, +0.10, -0.05),    # greenish + reduced R/B
     ]
     for ni in range(neutrals):
         v = ni * gray_step
@@ -259,8 +312,8 @@ def build_candidate_pool(
 
     # --- hue sweeps at multiple luminance levels ---
     luma_levels = [0.1, 0.3, 0.5, 0.7, 0.9]
-    hue_count = 24
-    chroma_levels = [0.4, 0.7]  # saturation fraction
+    hue_count = 16
+    chroma_levels = [0.6, 0.9]  # saturation fraction
     for luma in luma_levels:
         for hi in range(hue_count):
             angle = 2 * math.pi * hi / hue_count
@@ -282,6 +335,15 @@ def build_candidate_pool(
     # Stable sort for determinism
     pool.sort(key=lambda c: (c.source, c.rgb))
     return pool
+
+
+def max_selectable_patches() -> int:
+    """Return the maximum number of patches the greedy selector can produce.
+
+    This is simply the size of the candidate pool with current defaults.
+    The UI should cap the user-selected patch count at this value.
+    """
+    return len(build_candidate_pool())
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +614,7 @@ def select_patches(
         scores = (
             1.0 * novelty
             + 0.5 * region_uc
-            + 0.3 * neutrality
+            + 0.5 * neutrality
             + 0.3 * luma_bonus
         )
 
@@ -787,9 +849,9 @@ def generate_pass2_ti1(
     *,
     min_dE: float = 2.5,
     novelty_soft_cap: float = 30.0,
-    grid: int = 6,
-    halton_n: int = 1024,
-    neutrals: int = 33,
+    grid: int = 5,
+    halton_n: int = 128,
+    neutrals: int = 65,
     edge_steps: int = 17,
     created: Optional[str] = None,
     progress_callback: Callable[[str, int, int], None] | None = None,

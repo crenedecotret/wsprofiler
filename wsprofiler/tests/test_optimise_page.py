@@ -134,27 +134,34 @@ def test_optimise_page_load_wsp_backward_compat(tmp_path: Path):
     assert page._generate_config == {}
 
 
-def test_patch_count_spin_default(tmp_path: Path):
-    """Patch count spinbox is seeded from _PATCHES_PER_PAGE when config is set."""
+def test_chart_settings_seeded_from_generate_config(tmp_path: Path):
+    """Chart settings (instrument, paper, pages) are seeded from generate_config."""
     from wsprofiler.ui.pages.optimise_page import OptimisePage
 
     _ensure_app()
     page = OptimisePage(workspace=tmp_path)
 
-    assert page._patch_count_spin is not None
-    assert page._patch_count_spin.minimum() == 50
-    assert page._patch_count_spin.maximum() == 1000
-    # Default before config is set
-    assert page._patch_count_spin.value() == 400
+    # Controls exist
+    assert page._instr_combo is not None
+    assert page._paper_combo is not None
+    assert page._pages_spin is not None
+    assert page._summary_label is not None
 
-    # After setting config and calling _update_ready_status, value should
-    # come from _PATCHES_PER_PAGE
+    # Default before config (pages defaults to 1)
+    assert page._pages_spin.value() == 1
+
+    # After setting config and calling _update_ready_status
     page._generate_config = {"device": "i1", "paper": "A3", "double_density": False, "no_border": False}
     page._update_ready_status()
 
+    assert page._instr_combo.currentData() == "i1"
+    assert page._paper_combo.currentData() == "A3"
+    assert page._pages_spin.value() == 1
+
+    # Summary should show patches for i1 + A3 + 1 page
     from wsprofiler.ui.pages.generate_page import _PATCHES_PER_PAGE
-    expected = _PATCHES_PER_PAGE.get(("i1", "A3", False, False), 400)
-    assert page._patch_count_spin.value() == expected
+    expected_ppg = _PATCHES_PER_PAGE.get(("i1", "A3", False, False), 400)
+    assert str(expected_ppg) in page._summary_label.text()
 
 
 def test_pass_target_stem_naming(tmp_path: Path):
