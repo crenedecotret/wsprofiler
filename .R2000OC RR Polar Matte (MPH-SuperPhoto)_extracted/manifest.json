@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "current_page": 1,
+  "target_name": "R2000OC RR Polar Matte (MPH-SuperPhoto)",
+  "workspace": "/home/charles/vibecode/wsprofiler",
+  "generate": {
+    "device": "i1",
+    "paper": "Letter",
+    "target_path": "/home/charles/vibecode/wsprofiler/R2000OC RR Polar Matte (MPH-SuperPhoto)",
+    "show_output": false
+  },
+  "measure1": {
+    "chart_path": "/home/charles/vibecode/wsprofiler/R2000OC RR Polar Matte (MPH-SuperPhoto).ti2",
+    "current_strip": null,
+    "measured_strips": [],
+    "is_complete": false
+  },
+  "measure2": {
+    "chart_path": "/home/charles/vibecode/wsprofiler/assets/sample/sample_chart.ti2",
+    "current_strip": null,
+    "measured_strips": [],
+    "is_complete": false
+  },
+  "auto1": {
+    "show_output": false
+  },
+  "auto2": {
+    "show_output": false
+  },
+  "done": {
+    "final_icc_path": null
+  },
+  "files": {
+    "chart1_ti2": "R2000OC RR Polar Matte (MPH-SuperPhoto).ti2",
+    "chart1_ti1": "R2000OC RR Polar Matte (MPH-SuperPhoto).ti1"
+  }
+}

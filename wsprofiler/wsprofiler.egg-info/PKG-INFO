@@ -5,15 +5,27 @@ Summary: PySide6 GUI wrapper for ArgyllCMS chartread pipeline
 Author: Cascade
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: PySide6>=6.6
+Requires-Dist: pywin32>=227; sys_platform == "win32"
 Provides-Extra: test
 Requires-Dist: pytest>=7.0; extra == "test"
+Provides-Extra: build
+Requires-Dist: pyinstaller>=6.0; extra == "build"
+Dynamic: license-file
 
 # wsprofiler
 
-PySide6 desktop GUI that wraps the Argyll CMS color-profile pipeline (targen → printtarg → chartread → colprof) with an i1Profiler-style measurement screen.
+PySide6 desktop GUI that wraps the Argyll CMS color-profile pipeline (targen → printtarg → chartread → colprof).
 
-## Development setup
+## Installation
+
+### Prerequisites
+
+- **Python 3.10+**
+- **Argyll CMS binaries** (`targen`, `printtarg`, `chartread`, `colprof`, etc.) installed and on your `PATH`
+
+### Linux/macOS
 
 ```bash
 python -m venv .venv
@@ -22,12 +34,72 @@ pip install -e .
 python -m wsprofiler
 ```
 
-You must have the Argyll CMS binaries (`targen`, `printtarg`, `chartread`, `colprof`, etc.) installed and available on your `PATH`. The Measurement page will display whether they were discovered; if not, point the app at your install via the forthcoming Settings page or by adjusting `PATH` before launching.
+### Windows
+
+1. **Install Python 3.10+** from [python.org](https://python.org) (check "Add Python to PATH" during install)
+
+2. **Download and install Argyll CMS** for Windows from [argyllcms.com](https://www.argyllcms.com/):
+   - Download the Windows zip distribution
+   - Extract to a folder like `C:\Argyll_V3.x.x\bin`
+   - Add this `bin` folder to your system PATH:
+     - Open System Properties → Advanced → Environment Variables
+     - Edit "Path" under System variables
+     - Add the path to Argyll's `bin` directory
+
+3. **Install wsprofiler**:
+
+```powershell
+# Create and activate virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+
+# Install the package
+pip install -e .
+
+# Run the application
+python -m wsprofiler
+```
+
+**Note:** On Windows, the application uses `pywin32` for console interaction with ArgyllCMS tools. This is automatically installed as a Windows-only dependency.
+
+## Building Standalone Executables
+
+### Local Build
+
+To build a standalone executable locally (requires Python and pip):
+
+```bash
+# Install build dependencies
+pip install -e ".[build]"
+
+# Build executable
+pyinstaller wsprofiler.spec --clean --noconfirm
+```
+
+The executable will be created in the `dist/` directory:
+- **Linux**: `dist/wsprofiler` (single binary)
+- **Windows**: `dist/wsprofiler.exe` (single executable)
+
+### Download Pre-built Executables
+
+**Stable releases** are available on the [Releases](https://github.com/crenedecotret/wsprofiler/releases) page.
+
+Each release includes:
+- `wsprofiler-linux.tar.gz` - Linux executable
+- `wsprofiler-windows.zip` - Windows executable
+
+**Note**: The executables bundle Python and PySide6, making them ~50-100MB. Users don't need Python installed to run them.
+
+#### Development Builds (Bleeding Edge)
+
+For the latest builds from every commit, download artifacts from [GitHub Actions](https://github.com/crenedecotret/wsprofiler/actions):
+1. Click the most recent successful workflow run
+2. Download the artifacts at the bottom of the page
 
 ## Features
 
-- **Wizard shell** mirroring the targen → printtarg → chartread → colprof pipeline (non-measurement steps are currently placeholders).
-- **Measurement page** inspired by i1Profiler: instrument sidebar, status header, `.ti2` loader, live chart grid, and log console.
+- **Wizard shell** mirroring the targen → printtarg → chartread → colprof pipeline.
+- **Measurement page**: instrument sidebar, status header, `.ti2` loader, live chart grid, and log console.
 - **.ti2 parsing** via a lightweight CGATS reader; supports RGB and CMYK charts and groups patches by page/strip.
 - **Chart visualization** using `QGraphicsView` with a highlight overlay that follows the strip index reported by `chartread`.
 - **chartread integration**: the UI spawns `chartread <basename>` in the chart directory, streams stdout/stderr, reacts to "Reading row" prompts, and sends calibration keystrokes.
@@ -38,4 +110,4 @@ A minimal `.ti2` file lives in `assets/sample/sample_chart.ti2` so you can verif
 
 ## Status
 
-Early prototype: skeleton wizard, `.ti2` parsing, chart visualization, and basic `chartread` session handling are implemented. Pipeline generation (targen/printtarg) and ICC build (colprof) steps are placeholders for now.
+Early prototype: wizard shell, `.ti2` parsing, chart visualization, and `chartread` session handling are implemented. Pipeline generation (targen/printtarg) and ICC build (colprof) steps are functional.

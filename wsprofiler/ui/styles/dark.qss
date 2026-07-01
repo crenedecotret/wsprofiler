@@ -459,6 +459,15 @@ QListWidget::item:alternate {
     background-color: #161a24;
 }
 
+QListWidget::item:disabled {
+    color: #555a6e;
+    background-color: transparent;
+}
+
+QListWidget::item:disabled:hover {
+    background-color: transparent;
+}
+
 /* --- Menu ---------------------------------------------------------------- */
 QMenuBar {
     background-color: #161a24;

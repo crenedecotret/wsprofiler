@@ -264,6 +264,10 @@ class ChartScene(QGraphicsScene):
                 label_item.setFont(font)
         self._measured_strips.clear()
 
+    def measured_strips(self) -> list[int]:
+        """Return the list of strips that have been marked as measured."""
+        return sorted(self._measured_strips)
+
 
 class ChartView(QGraphicsView):
     # Forward the scene's stripClicked signal
@@ -331,6 +335,11 @@ class ChartView(QGraphicsView):
     def mark_strip_measured(self, strip: int) -> None:
         scene: ChartScene = self.scene()  # type: ignore[assignment]
         scene.mark_strip_measured(strip)
+
+    def measured_strips(self) -> list[int]:
+        """Return the list of strips that have been marked as measured."""
+        scene: ChartScene = self.scene()  # type: ignore[assignment]
+        return scene.measured_strips()
 
     def reset_measured_marks(self) -> None:
         scene: ChartScene = self.scene()  # type: ignore[assignment]

@@ -12,7 +12,10 @@ from .ui.theme import apply_theme
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("wsprofiler")
-    app.setOrganizationName("wsprofiler")
+    # Leave organizationName unset so QStandardPaths.AppDataLocation
+    # resolves to <data>/wsprofiler rather than <data>/wsprofiler/wsprofiler.
+    # The product is "wsprofiler" — there is no umbrella org.
+    app.setOrganizationName("")
 
     apply_theme(app)
 

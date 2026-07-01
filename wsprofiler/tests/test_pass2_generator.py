@@ -238,5 +238,69 @@ def test_generate_pass2_ti1_stub(tmp_path: Path, pass1_ti3: Path, monkeypatch):
 
     assert result == out_ti1
     assert out_ti1.exists()
-    table = cgats.load(out_ti1)
-    assert int(table.keywords["NUMBER_OF_SETS"]) == 25
+
+    # The generated .ti1 is a multi-table CTI1 file (main patches + density
+    # extremes + device combinations) that Argyll printtarg consumes. Our
+    # cgats.load() only handles single-table files, so verify the first
+    # table's metadata directly from the text instead of round-tripping.
+    content = out_ti1.read_text()
+    assert content.startswith("CTI1")
+    assert "NUMBER_OF_SETS 25" in content
+    assert "BEGIN_DATA_FORMAT" in content
+    assert "SAMPLE_ID RGB_R RGB_G RGB_B XYZ_X XYZ_Y XYZ_Z" in content
+    assert "DENSITY_EXTREME_VALUES" in content
+    assert "DEVICE_COMBINATION_VALUES" in content
+    # Three CTI1 tables: main, density extremes, device combinations
+    assert content.count("CTI1") == 3
+
+
+# ---------------------------------------------------------------------------
+# 7. Progress callback receives all 5 stages in order
+# ---------------------------------------------------------------------------
+
+def test_progress_callback(tmp_path: Path, pass1_ti3: Path, monkeypatch):
+    """generate_pass2_ti1 calls progress_callback with all 5 stages in order."""
+    from wsprofiler.profiling import pass2_generator as pg
+
+    class _StubPredictor:
+        def __init__(self, *a, **kw):
+            pass
+        def lab_batch(self, rgb: np.ndarray) -> np.ndarray:
+            return _stub_predictor(rgb)
+        def __call__(self, rgb: np.ndarray) -> np.ndarray:
+            return self.lab_batch(rgb)
+
+    monkeypatch.setattr(pg, "XicclLabPredictor", _StubPredictor)
+
+    out_ti1 = tmp_path / "chart.ti1"
+    stages: list[tuple[str, int, int]] = []
+
+    def cb(label: str, current: int, total: int) -> None:
+        stages.append((label, current, total))
+
+    pg.generate_pass2_ti1(
+        precond_icc=Path("/fake/precond.icc"),
+        pass1_ti3=pass1_ti3,
+        out_ti1=out_ti1,
+        target_n=25,
+        xicclu_path=Path("/fake/xicclu"),
+        min_dE=2.5,
+        grid=5,
+        halton_n=64,
+        neutrals=9,
+        edge_steps=5,
+        created="Mon Jan  1 00:00:00 2024",
+        progress_callback=cb,
+    )
+
+    assert len(stages) == 5
+    labels = [s[0] for s in stages]
+    assert labels == [
+        "Building candidate pool",
+        "Predicting candidate colours",
+        "Loading pass-1 measurements",
+        "Selecting patches",
+        "Writing chart file",
+    ]
+    assert all(s[2] == 5 for s in stages)
+    assert [s[1] for s in stages] == [1, 2, 3, 4, 5]

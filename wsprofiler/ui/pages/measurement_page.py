@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtCore import Qt, Signal
+
+if TYPE_CHECKING:
+    from ...session import MeasureState
 from PySide6.QtWidgets import (
     QApplication,
-    QFileDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -19,6 +22,7 @@ from ...ti import ti2, ti3
 from ..chart_view import ChartView
 from ..chartread_dialog import show_calibration_dialog, show_confirm_dialog, show_error_dialog
 from ..log_console import LogConsole
+
 from ..ti3_watcher import TI3Watcher, _simple_xyz_to_rgb
 
 
@@ -26,6 +30,7 @@ class MeasurementPage(QWidget):
     """UI for reading color charts with a spectrophotometer."""
     
     measurementsComplete = Signal(Path)  # Emitted when all rows are read
+    measurementStopped = Signal()  # Emitted whenever chartread exits (success or cancel)
     
     def __init__(self, workspace: Path, parent=None) -> None:
         super().__init__(parent)
@@ -56,12 +61,10 @@ class MeasurementPage(QWidget):
         main_layout.addWidget(self.chart_view, stretch=1)
 
         button_row = QHBoxLayout()
-        self.load_button = QPushButton("Load Chart")
         self.start_button = QPushButton("Read Chart")
         self.start_button.setEnabled(False)
         self.stop_button = QPushButton("Stop")
         self.stop_button.setVisible(False)
-        button_row.addWidget(self.load_button)
         button_row.addWidget(self.start_button)
         button_row.addWidget(self.stop_button)
 
@@ -85,18 +88,18 @@ class MeasurementPage(QWidget):
 
         root_layout.addWidget(main, stretch=1)
 
-        self.load_button.clicked.connect(self._on_load)
         self.start_button.clicked.connect(lambda: self._on_start())
         self.stop_button.clicked.connect(self._on_stop)
         self.accept_btn.clicked.connect(self._on_accept_reading)
         self.retry_btn.clicked.connect(self._on_retry_reading)
         self.giveup_btn.clicked.connect(self._on_giveup_reading)
-        
+
         # Connect strip click for navigation during measurement
         self.chart_view.stripClicked.connect(self._on_strip_clicked)
 
         self._session: chartread.ChartReadSession | None = None
         self._current_chart_path: Path | None = None
+        self._current_ti3_path: Path | None = None
         self._install = discover.discover()
         self._current_strip: int | None = None  # Track current strip during measurement
         self._target_strip: int | None = None  # Pending navigation target
@@ -122,21 +125,6 @@ class MeasurementPage(QWidget):
         if sample.exists():
             self._load_file(sample)
 
-    def _on_load(self) -> None:
-        settings = QSettings("wsprofiler", "wsprofiler")
-        last_dir = settings.value("last_ti2_dir", str(self.workspace))
-        
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select printtarg .ti2",
-            last_dir,
-            "Argyll chart (*.ti2);;All files (*)",
-        )
-        if path:
-            # Save the directory for next time
-            settings.setValue("last_ti2_dir", str(Path(path).parent))
-            self._load_file(Path(path))
-
     def get_current_ti3_path(self) -> Path | None:
         """Return the path to the current chart's .ti3 file if it exists."""
         if self._current_chart_path:
@@ -144,6 +132,58 @@ class MeasurementPage(QWidget):
             if ti3.exists():
                 return ti3
         return None
+
+    def snapshot(self) -> "MeasureState":
+        """Capture the current measurement state for serialization."""
+        from ...session import MeasureState
+        ti3 = self.get_current_ti3_path()
+        return MeasureState(
+            chart_path=str(self._current_chart_path) if self._current_chart_path else None,
+            current_strip=self._current_strip,
+            measured_strips=self.chart_view.measured_strips(),
+            is_complete=ti3 is not None and ti3.exists(),
+        )
+
+    def apply_snapshot(self, state: "MeasureState") -> None:
+        """Restore measurement state from a snapshot."""
+        if state.chart_path:
+            path = Path(state.chart_path)
+            # Only load the file if not already loaded
+            if self._current_chart_path != path:
+                self._load_file(path)
+            if state.measured_strips:
+                self.chart_view.reset_measured_marks()
+                for strip in state.measured_strips:
+                    self.chart_view.mark_strip_measured(strip)
+            if state.is_complete:
+                ti3 = path.with_suffix(".ti3")
+                if ti3.exists():
+                    self._load_existing_ti3(ti3)
+
+    def reset_state(self) -> None:
+        """Reset all measurement state and stop any active chartread session."""
+        if self._session is not None:
+            self._session.stop()
+            self._session = None
+        self._current_chart_path = None
+        self._current_ti3_path = None
+        self._current_strip = None
+        self._target_strip = None
+        self._pending_restart = False
+        self._initial_strip_seen = False
+        self._dialog_active = False
+        self._retry_pending = False
+        self._auto_done_sent = False
+        self._patches = []
+        self.chart_view.set_patches([])
+        self.chart_view.set_measurement_mode(False)
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.accept_btn.setVisible(False)
+        self.retry_btn.setVisible(False)
+        self.giveup_btn.setVisible(False)
+        self.status_label.setText("")
+        self.console.clear()
 
     def load_ti2(self, path: Path) -> None:
         """Public entry-point to load a .ti2 chart file."""
@@ -160,12 +200,12 @@ class MeasurementPage(QWidget):
         # Calculate strips per page for layout (26 strips = A-Z = 1 page)
         strips_per_page = 26
         self.chart_view.set_patches(patches, strips_per_page=strips_per_page)
-        
+
         self.status_label.setText(f"Loaded {len(patches)} patches from {path.name}")
         self.console.append_line(f"Loaded {path}")
         self._current_chart_path = path
         self.start_button.setEnabled(self._install is not None)
-        
+
         # Check for existing ti3 file and show measured colors if available
         ti3_path = path.with_suffix('.ti3')
         self.console.append_line(f"Looking for ti3: {ti3_path}")
@@ -175,18 +215,29 @@ class MeasurementPage(QWidget):
         else:
             self.chart_view.set_measurement_mode(False)
 
-    def _load_existing_ti3(self, ti3_path: Path) -> None:
-        """Load measured colors from existing ti3 file and show split view."""
+    def _load_existing_ti3(
+        self, ti3_path: Path, emit_complete: bool = True
+    ) -> None:
+        """Load measured colors from existing ti3 file and show split view.
+
+        When ``emit_complete`` is True (the default, used for the
+        "open a WSP / load .ti2 with an existing .ti3" path), this emits
+        ``measurementsComplete`` once the ti3 is parsed and colors are
+        shown. When called from ``_on_finished`` for the visual refresh
+        after a fresh chartread run, pass ``emit_complete=False`` — the
+        completion signal is emitted by ``_on_finished`` itself so it
+        fires even if ti3 parsing fails.
+        """
         try:
             measured = ti3.load_measured_patches(ti3_path)
             self.console.append_line(f"Loaded {len(measured)} patches from ti3")
             color_dict: dict[str, tuple[int, int, int]] = {}
-            
+
             for patch in measured:
                 if patch.xyz:
                     rgb = _simple_xyz_to_rgb(patch.xyz)
                     color_dict[patch.sample_loc] = rgb
-            
+
             self.console.append_line(f"Colors extracted: {len(color_dict)}")
             if color_dict:
                 self.console.append_line(f"Found existing measurements: {ti3_path.name}")
@@ -199,9 +250,11 @@ class MeasurementPage(QWidget):
                 }
                 for s in measured_strips:
                     self.chart_view.mark_strip_measured(s)
-                # Signal that measurements are already complete
+                # Record the ti3 path and, when requested, signal that
+                # measurements are already complete.
                 self._current_ti3_path = ti3_path
-                self.measurementsComplete.emit(ti3_path)
+                if emit_complete:
+                    self.measurementsComplete.emit(ti3_path)
             else:
                 self.console.append_line("No colors with XYZ data found")
                 self.chart_view.set_measurement_mode(False)
@@ -253,7 +306,6 @@ class MeasurementPage(QWidget):
         
         # Toggle button visibility
         self.start_button.setVisible(False)
-        self.load_button.setVisible(False)
         self.stop_button.setText("Stop")
         self.stop_button.setStyleSheet("")
         self.stop_button.setVisible(True)
@@ -461,9 +513,21 @@ class MeasurementPage(QWidget):
         self.console.append_line(f"chartread exited with code {code}")
         self._reset_and_hide_buttons()
         self._ti3_watcher.stop_watching()
-        # Emit signal on successful completion with the ti3 path
-        if code == 0 and self._current_ti3_path:
-            self.measurementsComplete.emit(self._current_ti3_path)
+
+        # Compute the ti3 path produced by chartread from the chart stem.
+        # We emit measurementsComplete deterministically whenever chartread
+        # exits 0 with a .ti3 on disk — independent of _load_existing_ti3's
+        # side effects, so a ti3 parse failure no longer strands the user
+        # on the Measurement page.
+        ti3_path = (
+            self._current_chart_path.with_suffix(".ti3")
+            if self._current_chart_path
+            else None
+        )
+        if code == 0 and ti3_path is not None and ti3_path.exists():
+            self._current_ti3_path = ti3_path
+            self.measurementsComplete.emit(ti3_path)
+
         self._current_strip = None
         self._target_strip = None
         self._initial_strip_seen = False
@@ -471,11 +535,13 @@ class MeasurementPage(QWidget):
         self._session = None
         self.chart_view.highlight_strip(None)
 
-        # Refresh split view from the freshly-written .ti3.
+        # Refresh split view from the freshly-written .ti3. Pass
+        # emit_complete=False: completion was already signalled above, and
+        # this call is purely for the visual representation.
         if self._current_chart_path:
             ti3_path = self._current_chart_path.with_suffix(".ti3")
             if ti3_path.exists():
-                self._load_existing_ti3(ti3_path)
+                self._load_existing_ti3(ti3_path, emit_complete=False)
             else:
                 self.chart_view.set_measurement_mode(False)
 
@@ -486,9 +552,9 @@ class MeasurementPage(QWidget):
             self._on_start(no_calibrate=True)
             return
 
-        # Final stop: clear target and restore start/load buttons.
+        # Final stop: clear target and restore start button.
         self._target_strip = None
         self.start_button.setVisible(True)
-        self.load_button.setVisible(True)
         self.stop_button.setVisible(False)
+        self.measurementStopped.emit()
 

@@ -172,10 +172,10 @@ def _halton(n: int, base: int) -> np.ndarray:
 
 
 def build_candidate_pool(
-    grid: int = 17,
-    halton_n: int = 4096,
-    neutrals: int = 65,
-    edge_steps: int = 33,
+    grid: int = 6,
+    halton_n: int = 1024,
+    neutrals: int = 33,
+    edge_steps: int = 17,
     include_anchors: bool = True,
 ) -> list[Candidate]:
     """Build the ~10 k candidate RGB pool.
@@ -494,8 +494,8 @@ def select_patches(
             return True
         sel = np.vstack(selected_lab_list)
         diffs = sel - cand_lab[idx]
-        dEs = np.sqrt(np.sum(diffs ** 2, axis=1))
-        return bool(dEs.min() >= min_dE)
+        sq = np.sum(diffs ** 2, axis=1)
+        return bool(sq.min() >= min_dE * min_dE)
 
     # Force anchors first (in stable order)
     for idx in forced_indices:
@@ -559,10 +559,14 @@ def select_patches(
         # Apply min_dE gate — mask out candidates too close to selected
         if selected_lab_list:
             sel_lab = np.vstack(selected_lab_list)
-            # Compute ΔE from each active candidate to every selected patch
-            diff_to_sel = act_lab[:, np.newaxis, :] - sel_lab[np.newaxis, :, :]
-            dE_to_sel = np.sqrt(np.sum(diff_to_sel ** 2, axis=2)).min(axis=1)
-            eligible_mask = dE_to_sel >= min_dE
+            min_sq = np.full(len(act_lab), np.inf, dtype=np.float64)
+            min_dE_sq = min_dE * min_dE
+            for start in range(0, len(sel_lab), 64):
+                sel_chunk = sel_lab[start : start + 64]
+                diff = act_lab[:, np.newaxis, :] - sel_chunk[np.newaxis, :, :]
+                sq = np.sum(diff ** 2, axis=2)
+                np.minimum(min_sq, sq.min(axis=1), out=min_sq)
+            eligible_mask = min_sq >= min_dE_sq
         else:
             eligible_mask = np.ones(len(active), dtype=bool)
 
@@ -783,11 +787,12 @@ def generate_pass2_ti1(
     *,
     min_dE: float = 2.5,
     novelty_soft_cap: float = 30.0,
-    grid: int = 17,
-    halton_n: int = 4096,
-    neutrals: int = 65,
-    edge_steps: int = 33,
+    grid: int = 6,
+    halton_n: int = 1024,
+    neutrals: int = 33,
+    edge_steps: int = 17,
     created: Optional[str] = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> Path:
     """Generate a Pass-2 .ti1 patch file using coverage-maximising selection.
 
@@ -813,6 +818,9 @@ def generate_pass2_ti1(
     -------
     Path to the written .ti1 file.
     """
+    _cb = progress_callback or (lambda *_: None)
+
+    _cb("Building candidate pool", 1, 5)
     predictor = XicclLabPredictor(xicclu_path, precond_icc)
 
     candidates = build_candidate_pool(
@@ -822,8 +830,12 @@ def generate_pass2_ti1(
         edge_steps=edge_steps,
     )
 
+    _cb("Predicting candidate colours", 2, 5)
+
+    _cb("Loading pass-1 measurements", 3, 5)
     pass1_lab = load_pass1_lab(pass1_ti3, predictor)
 
+    _cb("Selecting patches", 4, 5)
     selected = select_patches(
         candidates,
         predictor,
@@ -833,5 +845,6 @@ def generate_pass2_ti1(
         novelty_soft_cap=novelty_soft_cap,
     )
 
+    _cb("Writing chart file", 5, 5)
     write_ti1(out_ti1, selected, predictor=predictor, created=created)
     return out_ti1

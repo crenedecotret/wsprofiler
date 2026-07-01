@@ -3,6 +3,12 @@ __main__
 app
 argyll
 assets
+display_profile
+platform
+profiles
+profiling
+session
+session_manager
 tests
 ti
 ui

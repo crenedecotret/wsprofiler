@@ -326,13 +326,10 @@ class ProfilePage(QWidget):
         )
         ti3_form.setContentsMargins(8, 4, 8, 4)
 
-        ti3_row = QHBoxLayout()
         self.ti3_edit = QLineEdit()
+        self.ti3_edit.setReadOnly(True)
 
-        self.ti3_browse = QPushButton("Browse\u2026")
-        ti3_row.addWidget(self.ti3_edit, stretch=1)
-        ti3_row.addWidget(self.ti3_browse)
-        ti3_form.addRow("Measurement data (.ti3):", ti3_row)
+        ti3_form.addRow("Measurement data (.ti3):", self.ti3_edit)
 
         root.addWidget(ti3_group)
 
@@ -435,7 +432,6 @@ class ProfilePage(QWidget):
         root.addStretch(1)
 
         # Connections
-        self.ti3_browse.clicked.connect(self._browse_ti3)
         self.ref_browse.clicked.connect(self._browse_ref_profile)
         self.generate_btn.clicked.connect(self._on_generate)
         self.cancel_btn.clicked.connect(self._on_cancel)
@@ -489,20 +485,6 @@ class ProfilePage(QWidget):
             if not self.desc_edit.text().strip():
                 self.desc_edit.setText(path.stem)
 
-    def _browse_ti3(self) -> None:
-        current = self.ti3_edit.text().strip()
-        start_dir = str(Path(current).parent) if current else str(self.workspace)
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select .ti3 measurement data",
-            current or start_dir,
-            "Argyll measurement (*.ti3);;All files (*)",
-        )
-        if path:
-            self.ti3_edit.setText(path)
-            if not self.desc_edit.text().strip():
-                self.desc_edit.setText(Path(path).stem)
-
     def _browse_ref_profile(self) -> None:
         """Browse for a custom gamut mapping profile."""
         current = self.ref_combo.currentData()
@@ -543,6 +525,19 @@ class ProfilePage(QWidget):
             args.extend(["-S", ref])
         args.append(name)
         return args
+
+    def get_profile_config(self) -> dict[str, Any]:
+        """Return current profile settings as a plain dict.
+
+        Useful for saving the exact configuration used to generate a profile
+        so that optimisation passes can reuse it.
+        """
+        return {
+            "gamut_profile": self.ref_combo.currentData(),
+            "quality": self.quality_combo.currentData() or "h",
+            "smoothing": self.smoothing_spin.value(),
+            "description": self.desc_edit.text().strip(),
+        }
 
     def _get_profile_name(self) -> str:
         """Derive output profile name from ti3 filename."""

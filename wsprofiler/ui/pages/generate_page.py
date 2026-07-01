@@ -1,17 +1,19 @@
 """Generate page: wraps ArgyllCMS targen (+ optional printtarg).
 
-Provides the same patch-design knobs from the legacy ``pkpatches.py`` tool:
-total patch count, white/black reference patches, optional grayscale ramp,
-and optional ICC preconditioning profile.
+The "ICC profile destination" field holds the final path where the user
+wants the generated .icc profile saved. The actual chart generation
+(targen / printtarg) runs in a temporary working directory owned by the
+SessionManager; this page only knows the final destination.
 
-Outputs:
-    <working_folder>/<name>.ti1         (always)
-    <working_folder>/<name>.ti2 + chart (if "Generate printable chart" enabled)
+Outputs (in the session's temp dir):
+    <temp>/session.ti1         (always)
+    <temp>/session.ti2 + chart (always - chart is the printable output)
 """
 from __future__ import annotations
 
 import shlex
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QProcess, QSettings, Qt, Signal
 from PySide6.QtWidgets import (
@@ -38,25 +40,43 @@ from ..log_console import LogConsole
 
 # Patches per page for each (instrument, paper) combination.
 # Determined empirically by running printtarg with 400-patch test targets.
-# Key: (instrument, paper, double_density)
-_PATCHES_PER_PAGE: dict[tuple[str, str, bool], int] = {
-    ("i1", "A4", False): 441, ("i1", "A4R", False): 512, ("i1", "A3", False): 672,
-    ("i1", "A2", False): 987, ("i1", "Letter", False): 462, ("i1", "LetterR", False): 480,
-    ("i1", "Legal", False): 462,    ("i1", "4x6", False): 80, ("i1", "11x17", False): 630,
-    ("i1", "A3+", False): 1155,  # A3+/SuperB 483x329mm, measured
-    ("3p", "A4", False): 90, ("3p", "A4R", False): 100, ("3p", "A3", False): 240,
-    ("3p", "A2", False): 490, ("3p", "Letter", False): 98, ("3p", "LetterR", False): 90,
-    ("3p", "Legal", False): 133, ("3p", "4x6", False): 18, ("3p", "11x17", False): 216,
-    ("3p", "A3+", False): 288,  # A3+/SuperB 483x329mm, same as CM
-    ("CM", "A4", False): 90, ("CM", "A4R", False): 100, ("CM", "A3", False): 240,
-    ("CM", "A2", False): 490, ("CM", "Letter", False): 98, ("CM", "LetterR", False): 90,
-    ("CM", "Legal", False): 133, ("CM", "4x6", False): 18, ("CM", "11x17", False): 216,
-    ("CM", "A3+", False): 288,  # A3+/SuperB 483x329mm, measured
+# Key: (instrument, paper, double_density, no_border)
+_PATCHES_PER_PAGE: dict[tuple[str, str, bool, bool], int] = {
+    # i1Pro (i1)
+    ("i1", "A4", False, False): 441, ("i1", "A4R", False, False): 512,
+    ("i1", "A3", False, False): 672, ("i1", "A2", False, False): 987,
+    ("i1", "Letter", False, False): 462, ("i1", "LetterR", False, False): 480,
+    ("i1", "Legal", False, False): 462, ("i1", "4x6", False, False): 80,
+    ("i1", "11x17", False, False): 630,
+    ("i1", "A3+", False, False): 1155,  # A3+/SuperB 483x329mm, measured
+    # i1Pro with no-border (-L)
+    ("i1", "A4", False, True): 504, ("i1", "A4R", False, True): 560,
+    ("i1", "A3", False, True): 735, ("i1", "A2", False, True): 1050,
+    ("i1", "Letter", False, True): 504, ("i1", "LetterR", False, True): 512,
+    ("i1", "Legal", False, True): 504, ("i1", "4x6", False, True): 100,
+    ("i1", "11x17", False, True): 672,
+    ("i1", "A3+", False, True): 1218,  # A3+/SuperB 483x329mm with -L, measured
+    # i1Pro3+ (3p)
+    ("3p", "A4", False, False): 90, ("3p", "A4R", False, False): 100,
+    ("3p", "A3", False, False): 240, ("3p", "A2", False, False): 490,
+    ("3p", "Letter", False, False): 98, ("3p", "LetterR", False, False): 90,
+    ("3p", "Legal", False, False): 133, ("3p", "4x6", False, False): 18,
+    ("3p", "11x17", False, False): 216,
+    ("3p", "A3+", False, False): 288,  # A3+/SuperB 483x329mm, same as CM
+    # ColorMunki (CM)
+    ("CM", "A4", False, False): 90, ("CM", "A4R", False, False): 100,
+    ("CM", "A3", False, False): 240, ("CM", "A2", False, False): 490,
+    ("CM", "Letter", False, False): 98, ("CM", "LetterR", False, False): 90,
+    ("CM", "Legal", False, False): 133, ("CM", "4x6", False, False): 18,
+    ("CM", "11x17", False, False): 216,
+    ("CM", "A3+", False, False): 288,  # A3+/SuperB 483x329mm, measured
     # ColorMunki double density (-h)
-    ("CM", "A4", True): 210, ("CM", "A4R", True): 180, ("CM", "A3", True): 460,
-    ("CM", "A2", True): 1015, ("CM", "Letter", True): 196, ("CM", "LetterR", True): 171,
-    ("CM", "Legal", True): 266, ("CM", "4x6", True): 30, ("CM", "11x17", True): 456,
-    ("CM", "A3+", True): 578,  # A3+/SuperB 483x329mm with double density, measured
+    ("CM", "A4", True, False): 210, ("CM", "A4R", True, False): 180,
+    ("CM", "A3", True, False): 460, ("CM", "A2", True, False): 1015,
+    ("CM", "Letter", True, False): 196, ("CM", "LetterR", True, False): 171,
+    ("CM", "Legal", True, False): 266, ("CM", "4x6", True, False): 30,
+    ("CM", "11x17", True, False): 456,
+    ("CM", "A3+", True, False): 578,  # A3+/SuperB 483x329mm with double density, measured
 }
 
 
@@ -64,6 +84,20 @@ class GeneratePage(QWidget):
     """UI for generating ArgyllCMS test charts via targen (+printtarg)."""
 
     chartGenerated = Signal(Path)
+
+    @property
+    def generated_target_path(self) -> Path | None:
+        """Return the final ICC destination path for the most recent generation.
+
+        ``None`` if generation has not yet run successfully.
+        """
+        return self._generated_target
+
+    @property
+    def final_icc_destination(self) -> Path | None:
+        """Return the current value of the ICC profile destination field."""
+        text = self.target_edit.text().strip()
+        return Path(text) if text else None
 
     # ---- programmatic API for wizard-driven operation ---------------------
     def set_automatic_config(
@@ -85,7 +119,7 @@ class GeneratePage(QWidget):
         precond_path : Path or str, optional
             Path to preconditioning ICC profile.
         target_path : Path or str, optional
-            Target folder/file stem (e.g. ``/tmp/mytarget``).
+            Path to the final ICC profile destination (e.g. ``~/profiles/myprinter.icc``).
         auto_start : bool
             If True, immediately start generation.
         """
@@ -111,6 +145,15 @@ class GeneratePage(QWidget):
         """Programmatic start of chart generation (same as clicking Generate)."""
         self._on_generate()
 
+    def set_working_directory(self, path: str | Path) -> None:
+        """Set the directory where targen/printtarg output files will be created.
+
+        The Wizard calls this before invoking ``trigger_generate()`` to point
+        Argyll at the SessionManager's temp directory. The user-facing
+        destination field is unaffected.
+        """
+        self._work_dir = str(path)
+
     def __init__(self, workspace: Path, parent=None) -> None:
         super().__init__(parent)
         self.workspace = workspace
@@ -119,6 +162,9 @@ class GeneratePage(QWidget):
         self._pending_steps: list[tuple[str, list[str], Path | None]] = []
         self._generated_target: Path | None = None
         self._generation_error: bool = False
+        # Working directory is set by the Wizard/SessionManager before each
+        # generation. Defaults to the workspace so dev-mode still works.
+        self._work_dir: str = str(workspace)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(23, 23, 23, 12)
@@ -128,7 +174,7 @@ class GeneratePage(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: 600;")
         root.addWidget(title)
 
-        # --- Target --------------------------------------------------------
+        # --- ICC profile destination ---------------------------------------
         target_group = QGroupBox("")
         target_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         target_form = QFormLayout(target_group)
@@ -137,12 +183,13 @@ class GeneratePage(QWidget):
         target_form.setContentsMargins(8, 4, 8, 4)
 
         target_row = QHBoxLayout()
-        self.target_edit = QLineEdit(str(workspace / "mytarget"))
+        default_dest = str(workspace / "mytarget.icc")
+        self.target_edit = QLineEdit(default_dest)
 
         self.target_browse = QPushButton("Browse\u2026")
         target_row.addWidget(self.target_edit, stretch=1)
         target_row.addWidget(self.target_browse)
-        target_form.addRow("Profile folder/name:", target_row)
+        target_form.addRow("ICC profile destination:", target_row)
 
         root.addWidget(target_group)
 
@@ -164,13 +211,20 @@ class GeneratePage(QWidget):
         self.double_density_check = QCheckBox("Double density (-h, ColorMunki only)")
         self.double_density_check.setChecked(True)
         self.double_density_check.setVisible(False)
-        dd_row = QWidget()
-        dd_layout = QHBoxLayout(dd_row)
-        dd_layout.setContentsMargins(0, 0, 0, 0)
-        dd_layout.addWidget(self.double_density_check)
-        dd_layout.addStretch()
-        dd_row.setFixedHeight(self.double_density_check.sizeHint().height())
-        layout_form.addRow("", dd_row)
+        self.no_border_check = QCheckBox("Suppress left paperclip border (-L, i1Pro only)")
+        self.no_border_check.setChecked(False)
+        self.no_border_check.setVisible(False)
+        self._options_row = QWidget()
+        options_layout = QHBoxLayout(self._options_row)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        self._options_placeholder = QLabel("")
+        self._options_placeholder.setMinimumHeight(self.double_density_check.sizeHint().height())
+        self._options_placeholder.setVisible(False)
+        options_layout.addWidget(self._options_placeholder)
+        options_layout.addWidget(self.double_density_check)
+        options_layout.addWidget(self.no_border_check)
+        options_layout.addStretch()
+        layout_form.addRow("", self._options_row)
 
         self.paper_combo = QComboBox()
         for code, desc in [
@@ -259,13 +313,42 @@ class GeneratePage(QWidget):
         self.precond_check.toggled.connect(self._refresh_preview)
         self.pages_spin.valueChanged.connect(self._refresh_preview)
         self.instrument_combo.currentIndexChanged.connect(self._on_instrument_changed)
+        self.instrument_combo.currentIndexChanged.connect(self._persist_settings)
         self.paper_combo.currentIndexChanged.connect(self._refresh_preview)
+        self.paper_combo.currentIndexChanged.connect(self._persist_settings)
         self.double_density_check.toggled.connect(self._refresh_preview)
+        self.double_density_check.toggled.connect(self._persist_settings)
+        self.no_border_check.toggled.connect(self._refresh_preview)
+        self.no_border_check.toggled.connect(self._persist_settings)
         self.precond_path.textChanged.connect(self._refresh_preview)
         self.precond_browse.clicked.connect(self._browse_precond)
         self.target_browse.clicked.connect(self._browse_target)
         self.generate_btn.clicked.connect(self._on_generate)
         self.cancel_btn.clicked.connect(self._on_cancel)
+
+        # Restore persisted defaults (block _persist_settings while doing so)
+        self._restoring = True
+        settings = QSettings()
+        last_device = settings.value("wizard/last_device")
+        if last_device:
+            idx = self.instrument_combo.findData(last_device)
+            if idx >= 0:
+                self.instrument_combo.setCurrentIndex(idx)
+        self._on_instrument_changed()
+
+        last_paper = settings.value("wizard/last_paper")
+        if last_paper:
+            idx = self.paper_combo.findData(last_paper)
+            if idx >= 0:
+                self.paper_combo.setCurrentIndex(idx)
+
+        last_dd = settings.value("wizard/last_double_density")
+        if last_dd is not None:
+            self.double_density_check.setChecked(str(last_dd).lower() == "true")
+        last_nb = settings.value("wizard/last_no_border")
+        if last_nb is not None:
+            self.no_border_check.setChecked(str(last_nb).lower() == "true")
+        self._restoring = False
 
         if self._install is None:
             self.console.append_line(
@@ -308,7 +391,8 @@ class GeneratePage(QWidget):
         paper = self.paper_combo.currentData() or "A3"
         pages = self.pages_spin.value()
         dd = self.double_density_check.isChecked() and instrument == "CM"
-        ppg = _PATCHES_PER_PAGE.get((instrument, paper, dd), 400)
+        nb = self.no_border_check.isChecked() and instrument == "i1"
+        ppg = _PATCHES_PER_PAGE.get((instrument, paper, dd, nb), 400)
         total_patches = ppg * pages
         if paper == "4x6":
             # Too small for explicit B/W and gray; let targen decide
@@ -341,6 +425,8 @@ class GeneratePage(QWidget):
         args = ["-v", f"-i{instrument}", "-t300"]
         if self.double_density_check.isChecked() and instrument == "CM":
             args.append("-h")
+        if self.no_border_check.isChecked() and instrument == "i1":
+            args.append("-L")
         # Custom paper sizes need -pWWWxHHH format
         if paper == "A3+":
             args.extend(["-p483x329", name])  # A3+/SuperB 483x329mm
@@ -348,10 +434,43 @@ class GeneratePage(QWidget):
             args.extend([f"-p{paper}", name])
         return args
 
+    def get_generate_config(self) -> dict[str, Any]:
+        """Return current generation settings as a plain dict.
+
+        Useful for saving the exact configuration used to generate a chart
+        so that optimisation passes can reuse the same instrument, paper,
+        and layout settings.
+        """
+        precond = ""
+        if self.precond_check.isChecked():
+            precond = self.precond_path.text().strip()
+        return {
+            "device": self.instrument_combo.currentData() or "i1",
+            "paper": self.paper_combo.currentData() or "A3",
+            "pages": self.pages_spin.value(),
+            "target_path": self.target_edit.text().strip(),
+            "double_density": self.double_density_check.isChecked(),
+            "no_border": self.no_border_check.isChecked(),
+            "precond_path": precond,
+        }
+
     def _on_instrument_changed(self) -> None:
         instrument = self.instrument_combo.currentData() or "i1"
-        self.double_density_check.setVisible(instrument == "CM")
+        show_dd = instrument == "CM"
+        show_nb = instrument == "i1"
+        self.double_density_check.setVisible(show_dd)
+        self.no_border_check.setVisible(show_nb)
+        self._options_placeholder.setVisible(not (show_dd or show_nb))
         self._refresh_preview()
+
+    def _persist_settings(self) -> None:
+        if getattr(self, "_restoring", False):
+            return
+        settings = QSettings()
+        settings.setValue("wizard/last_device", self.instrument_combo.currentData())
+        settings.setValue("wizard/last_paper", self.paper_combo.currentData())
+        settings.setValue("wizard/last_double_density", self.double_density_check.isChecked())
+        settings.setValue("wizard/last_no_border", self.no_border_check.isChecked())
 
     def _refresh_preview(self) -> None:
         # Update summary label
@@ -360,7 +479,8 @@ class GeneratePage(QWidget):
         instrument = self.instrument_combo.currentData() or "i1"
         paper = self.paper_combo.currentData() or "A3"
         dd = self.double_density_check.isChecked() and instrument == "CM"
-        ppg = _PATCHES_PER_PAGE.get((instrument, paper, dd), 400)
+        nb = self.no_border_check.isChecked() and instrument == "i1"
+        ppg = _PATCHES_PER_PAGE.get((instrument, paper, dd, nb), 400)
         if self._is_4x6():
             detail = "Auto white/black (targen defaults)"
         else:
@@ -374,9 +494,8 @@ class GeneratePage(QWidget):
         if not self._install:
             self.cmd_preview.setPlainText("(argyllcms not found)")
             return
-        target = Path(self.target_edit.text().strip() or str(self.workspace / "mytarget"))
-        work_dir = shlex.quote(str(target.parent))
-        name = target.name
+        work_dir = shlex.quote(self._work_dir)
+        name = "session"  # always use the session stem inside the temp dir
         targen = " ".join(
             shlex.quote(s) for s in [str(self._install.targen)] + self._build_targen_args(name)
         )
@@ -402,14 +521,16 @@ class GeneratePage(QWidget):
         current = self.target_edit.text().strip()
         start_dir = str(Path(current).parent) if current else str(self.workspace)
         path, _ = QFileDialog.getSaveFileName(
-            self, "Select target file", current or str(self.workspace / "mytarget"),
-            "All files (*)",
+            self,
+            "Select ICC profile destination",
+            current or str(self.workspace / "mytarget.icc"),
+            "ICC profiles (*.icc *.icm);;All files (*)",
         )
         if path:
-            # Strip any extension the user may have typed
             p = Path(path)
-            if p.suffix in (".ti1", ".ti2", ".ti3"):
-                path = str(p.with_suffix(""))
+            # Make sure the file has an .icc extension; if not, add one.
+            if p.suffix.lower() not in (".icc", ".icm"):
+                path = str(p.with_suffix(".icc"))
             self.target_edit.setText(path)
             self._refresh_preview()
 
@@ -417,16 +538,24 @@ class GeneratePage(QWidget):
     def _on_generate(self) -> None:
         if not self._install:
             return
+
+        settings = QSettings()
+        settings.setValue("wizard/last_device", self.instrument_combo.currentData())
+        settings.setValue("wizard/last_paper", self.paper_combo.currentData())
+        settings.setValue("wizard/last_double_density", self.double_density_check.isChecked())
+        settings.setValue("wizard/last_no_border", self.no_border_check.isChecked())
+
         target_str = self.target_edit.text().strip()
         if not target_str:
-            QMessageBox.warning(self, "Missing target", "Please select a target file.")
+            QMessageBox.warning(
+                self, "Missing destination",
+                "Please choose a destination for the ICC profile.",
+            )
             return
+        # The "target" is now the FINAL ICC destination. We don't require its
+        # parent to exist; the SessionManager will create it when copying.
         self._generated_target = Path(target_str)
         self._generation_error = False
-        target = self._generated_target
-        if not target.parent.exists():
-            QMessageBox.warning(self, "Bad folder", f"Folder does not exist:\n{target.parent}")
-            return
 
         # Validate preconditioning file if enabled
         if self.precond_check.isChecked():
@@ -438,12 +567,15 @@ class GeneratePage(QWidget):
                 )
                 return
 
-        self._work_dir = str(target.parent)
-        name = target.name
+        # Argyll runs in the SessionManager's temp working directory.
+        # The internal stem used is just "session" (set by SessionManager).
+        self._work_dir = self._work_dir or str(self.workspace)
+        name = "session"  # always use the session stem inside the temp dir
 
         self.console.clear()
         self.console.append_line(f"Working folder: {self._work_dir}")
         self.console.append_line(f"Target stem:    {name}")
+        self.console.append_line(f"Final ICC destination: {self._generated_target}")
 
         # Queue the steps to run in order.
         self._pending_steps.clear()
@@ -513,6 +645,6 @@ class GeneratePage(QWidget):
         self.generate_btn.setVisible(True)
         self.cancel_btn.setVisible(False)
         if not self._generation_error and self._generated_target is not None:
-            ti2_path = self._generated_target.with_suffix(".ti2")
+            ti2_path = Path(self._work_dir) / "session.ti2"
             self.chartGenerated.emit(ti2_path)
 

@@ -14,6 +14,7 @@ class ArgyllInstall:
     targen: Path
     printtarg: Path
     colprof: Path
+    xicclu: Path
 
 
 def _get_exe_name(name: str) -> str:
@@ -48,7 +49,8 @@ def discover(explicit: Optional[Path] = None) -> ArgyllInstall | None:
         targen = base / _get_exe_name("targen")
         printtarg = base / _get_exe_name("printtarg")
         colprof = base / _get_exe_name("colprof")
+        xicclu = base / _get_exe_name("xicclu")
 
-        if all(exe.exists() for exe in (chartread, targen, printtarg, colprof)):
-            return ArgyllInstall(chartread=chartread, targen=targen, printtarg=printtarg, colprof=colprof)
+        if all(exe.exists() for exe in (chartread, targen, printtarg, colprof, xicclu)):
+            return ArgyllInstall(chartread=chartread, targen=targen, printtarg=printtarg, colprof=colprof, xicclu=xicclu)
     return None

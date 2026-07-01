@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
+from PySide6.QtGui import QCloseEvent, QGuiApplication
+from PySide6.QtWidgets import (
+    QMainWindow,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .wizard import Wizard
 
@@ -15,11 +18,15 @@ class MainWindow(QMainWindow):
         self.workspace = workspace
 
         self.setWindowTitle("wsprofiler — Argyll GUI")
+
+        # The wizard owns its own session management and the
+        # "Load Session…" button (in the step column at the bottom).
         self._wizard = Wizard(workspace=workspace)
 
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(0)
         layout.addWidget(self._wizard)
         self.setCentralWidget(container)
 
@@ -31,3 +38,7 @@ class MainWindow(QMainWindow):
         else:
             target_w, target_h = 1800, 950
         self.resize(target_w, target_h)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._wizard.save_session_state()
+        super().closeEvent(event)
