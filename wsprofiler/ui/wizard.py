@@ -292,6 +292,12 @@ class Wizard(QWidget):
 
     # ---------------------------------------------------------- callbacks
     def _on_chart_generated(self, ti2_path: Path) -> None:
+        # Sync the session with the destination the user actually chose
+        # for this generation (may differ from the startup default).
+        dest = self._pages["Generate"].generated_target_path
+        if dest:
+            self._session.set_final_icc_path(dest)
+
         # Auto-save the WSP after the chart is generated.
         self._auto_save_after_generate(ti2_path)
 
