@@ -227,7 +227,9 @@ class Wizard(QWidget):
         # Restore ProfilePage state.
         ti3_path = files.get("ti3")
         if ti3_path is not None and Path(ti3_path).exists():
-            prof_page.set_ti3_path(Path(ti3_path))
+            icc_dest = gen_config.get("target_path")
+            profile_name = Path(icc_dest).stem if icc_dest else ""
+            prof_page.set_ti3_path(Path(ti3_path), profile_name=profile_name)
 
         profile_configs = manifest.get("profile_configs", [])
         if profile_configs:
@@ -686,7 +688,9 @@ class Wizard(QWidget):
         if page is self._pages["Profile"]:
             ti3_path = self._pages["Measure"].get_current_ti3_path()
             if ti3_path:
-                page.set_ti3_path(ti3_path)
+                icc_dest = self._pages["Generate"].final_icc_destination
+                profile_name = icc_dest.stem if icc_dest else ""
+                page.set_ti3_path(ti3_path, profile_name=profile_name)
 
     def _on_step_changed(self, index: int) -> None:
         if self._prev_step_index == 1:

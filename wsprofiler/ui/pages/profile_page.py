@@ -478,12 +478,12 @@ class ProfilePage(QWidget):
                 self.ref_combo.setCurrentIndex(clay_idx)
 
     # ----------------------------------------------------------- browsing
-    def set_ti3_path(self, path: Path | None) -> None:
+    def set_ti3_path(self, path: Path | None, profile_name: str = "") -> None:
         """Populate the .ti3 path from measurement page."""
         if path and path.exists():
             self.ti3_edit.setText(str(path))
             if not self.desc_edit.text().strip():
-                self.desc_edit.setText(path.stem)
+                self.desc_edit.setText(profile_name or path.stem)
 
     def _browse_ref_profile(self) -> None:
         """Browse for a custom gamut mapping profile."""
