@@ -741,9 +741,18 @@ class Wizard(QWidget):
         titles = list(self._pages.keys())
         items = [self.steps.item(i) for i in range(self.steps.count())]
 
-        # Generate is always available
-        self._set_item_enabled(items[0], True)
-        items[0].setToolTip("")
+        # Generate is disabled once a chart has been generated (would break the chain)
+        generate_available = True
+        if self._pending_ti2 is not None:
+            generate_available = False
+        if generate_available:
+            target = self._session.target_path
+            if target is not None and target.with_suffix(".ti2").exists():
+                generate_available = False
+        self._set_item_enabled(items[0], generate_available)
+        items[0].setToolTip(
+            "" if generate_available else "Cannot change chart settings after generation"
+        )
 
         # Measure available if ti2 exists
         measure_available = self._pending_ti2 is not None
