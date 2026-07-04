@@ -16,6 +16,8 @@ from PySide6.QtCore import Qt, Signal, QProcess
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -37,7 +39,12 @@ from ...ti import ti3_combiner
 from ..log_console import LogConsole
 from ..session_controller import SimpleSessionController, find_tiff_pages
 from .measurement_page import MeasurementPage
-from .profile_page import _find_adobe_rgb_profile, _find_argyll_ref_dir, _list_ref_profiles
+from .profile_page import (
+    _find_adobe_rgb_profile,
+    _find_argyll_ref_dir,
+    _list_ref_profiles,
+    _read_icc_description,
+)
 
 
 # ------------------------------------------------------------------ helpers
@@ -191,6 +198,9 @@ class OptimisePage(QWidget):
         chart_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self._instr_combo = QComboBox()
+        self._instr_combo.setStyleSheet(
+            "QComboBox:disabled { color: #666; }"
+        )
         for code, label in [
             ("i1", "i1Pro (i1)"),
             ("3p", "i1Pro3+ (3p)"),
@@ -260,17 +270,29 @@ class OptimisePage(QWidget):
         settings_layout = QFormLayout(settings_group)
         settings_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self._gamut_edit = QLineEdit()
-        settings_layout.addRow("Gamut mapping profile:", self._gamut_edit)
+        # Gamut mapping profile
+        gamut_row = QHBoxLayout()
+        self._gamut_combo = QComboBox()
+        self._gamut_combo.setMinimumWidth(300)
+        self._gamut_browse = QPushButton("Browse\u2026")
+        gamut_row.addWidget(self._gamut_combo, stretch=1)
+        gamut_row.addWidget(self._gamut_browse)
+        settings_layout.addRow("Gamut mapping profile:", gamut_row)
 
-        self._quality_combo = QWidget()  # placeholder; we'll use a simple line edit for now
-        self._quality_edit = QLineEdit("High")
-        settings_layout.addRow("Profile quality:", self._quality_edit)
+        # Profile quality
+        self._quality_combo = QComboBox()
+        self._quality_combo.addItem("Low", "l")
+        self._quality_combo.addItem("Medium", "m")
+        self._quality_combo.addItem("High", "h")
+        self._quality_combo.setCurrentIndex(2)
+        settings_layout.addRow("Profile quality:", self._quality_combo)
 
-        self._smoothing_spin = QSpinBox()
-        self._smoothing_spin.setRange(0, 150)
-        self._smoothing_spin.setValue(50)
-        self._smoothing_spin.setSuffix(" (%)")
+        # Smoothing
+        self._smoothing_spin = QDoubleSpinBox()
+        self._smoothing_spin.setRange(0.0, 1.5)
+        self._smoothing_spin.setValue(0.5)
+        self._smoothing_spin.setDecimals(2)
+        self._smoothing_spin.setSingleStep(0.05)
         settings_layout.addRow("Smoothing (-r):", self._smoothing_spin)
 
         self._desc_edit = QLineEdit()
@@ -286,6 +308,9 @@ class OptimisePage(QWidget):
         self._pages_spin.valueChanged.connect(self._update_summary)
         self._dd_check.toggled.connect(self._update_summary)
         self._nb_check.toggled.connect(self._update_summary)
+        self._gamut_browse.clicked.connect(self._browse_gamut_profile)
+
+        self._discover_default_gamut()
 
     def _setup_generating_page(self) -> None:
         page = QWidget()
@@ -419,18 +444,35 @@ class OptimisePage(QWidget):
 
     def _apply_settings_to_ui(self, config: dict[str, Any]) -> None:
         """Populate the settings editor from a saved config dict."""
-        self._gamut_edit.setText(config.get("gamut_profile") or "")
-        quality = config.get("quality", "High")
-        self._quality_edit.setText(quality)
+        gamut = config.get("gamut_profile")
+        if gamut:
+            existing = self._gamut_combo.findData(gamut)
+            if existing >= 0:
+                self._gamut_combo.setCurrentIndex(existing)
+            else:
+                desc = _read_icc_description(Path(gamut))
+                display_text = f"{Path(gamut).name} — {desc}" if desc else Path(gamut).name
+                self._gamut_combo.addItem(display_text, gamut)
+                self._gamut_combo.setCurrentIndex(self._gamut_combo.count() - 1)
+        else:
+            self._gamut_combo.setCurrentIndex(-1)
+
+        quality = config.get("quality", "h")
+        idx = self._quality_combo.findData(quality)
+        if idx < 0:
+            idx = self._quality_combo.findText(quality, Qt.MatchFlag.MatchFixedString)
+        if idx >= 0:
+            self._quality_combo.setCurrentIndex(idx)
+
         smoothing = config.get("smoothing", 0.5)
-        self._smoothing_spin.setValue(int(smoothing * 100))
+        self._smoothing_spin.setValue(smoothing)
         self._desc_edit.setText(config.get("description", ""))
 
     def _collect_settings_from_ui(self) -> dict[str, Any]:
         """Gather current settings from the UI editor."""
-        gamut = self._gamut_edit.text().strip() or None
-        quality = self._quality_edit.text().strip() or "High"
-        smoothing = self._smoothing_spin.value() / 100.0
+        gamut = self._gamut_combo.currentData() or None
+        quality = self._quality_combo.currentData() or "h"
+        smoothing = self._smoothing_spin.value()
         desc = self._desc_edit.text().strip()
         return {
             "gamut_profile": gamut,
@@ -438,6 +480,53 @@ class OptimisePage(QWidget):
             "smoothing": smoothing,
             "description": desc,
         }
+
+    # ----------------------------------------------------------- gamut
+
+    def _discover_default_gamut(self) -> None:
+        ref_dir = _find_argyll_ref_dir(
+            self._install.colprof if self._install else None
+        )
+        profiles = _list_ref_profiles(ref_dir)
+
+        if not profiles:
+            adobe = _find_adobe_rgb_profile()
+            if adobe:
+                profiles = [adobe]
+            else:
+                srgb = _find_srgb_profile()
+                if srgb:
+                    profiles = [srgb]
+
+        for profile in profiles:
+            desc = _read_icc_description(profile)
+            display_text = f"{profile.name} — {desc}" if desc else profile.name
+            self._gamut_combo.addItem(display_text, str(profile))
+
+        if profiles:
+            clay_idx = self._gamut_combo.findText(
+                "ClayRGB1998.icm", Qt.MatchFlag.MatchStartsWith
+            )
+            if clay_idx >= 0:
+                self._gamut_combo.setCurrentIndex(clay_idx)
+
+    def _browse_gamut_profile(self) -> None:
+        current = self._gamut_combo.currentData()
+        start_dir = str(Path(current).parent) if current else str(self.workspace)
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select gamut mapping profile",
+            start_dir,
+            "ICC/ICM profiles (*.icc *.icm);;All files (*)",
+        )
+        if path:
+            p = Path(path)
+            desc = _read_icc_description(p)
+            display_text = f"{p.name} — {desc}" if desc else p.name
+            existing = self._gamut_combo.findData(str(p))
+            if existing < 0:
+                self._gamut_combo.addItem(display_text, str(p))
+            self._gamut_combo.setCurrentIndex(self._gamut_combo.findData(str(p)))
 
     # ----------------------------------------------------------- status
 
@@ -519,6 +608,8 @@ class OptimisePage(QWidget):
         self._status_label.setText(text)
         self._build_profile_btn.setEnabled(False)
         self._generate_addon_btn.setEnabled(True)
+        # Lock the instrument to the original device category
+        self._instr_combo.setEnabled(False)
 
     def _latest_icc_path(self) -> Path | None:
         """Return the most recent ICC profile (original or optimised)."""
