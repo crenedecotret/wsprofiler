@@ -211,7 +211,7 @@ class MeasurementPage(QWidget):
         self.console.append_line(f"Looking for ti3: {ti3_path}")
         self.console.append_line(f"ti3 exists: {ti3_path.exists()}")
         if ti3_path.exists():
-            self._load_existing_ti3(ti3_path)
+            self._load_existing_ti3(ti3_path, emit_complete=False)
         else:
             self.chart_view.set_measurement_mode(False)
 

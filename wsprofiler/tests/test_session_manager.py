@@ -188,7 +188,9 @@ def test_load_from_wsp_restores_files():
         try:
             manifest, files, temp_dir = sm2.load_from_wsp(sm.wsp_path)
             assert sm2.is_loaded
+            # Auto-saves go to the same path as the source WSP.
             assert sm2.wsp_path == sm.wsp_path
+            assert sm2.wsp_path is not None
             assert temp_dir.exists()
             # Files should be extracted into temp_dir
             assert "session.ti2" in {f.name for f in temp_dir.iterdir()}

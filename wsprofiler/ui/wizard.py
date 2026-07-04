@@ -174,6 +174,22 @@ class Wizard(QWidget):
             if old_key in files and new_key not in files:
                 files[new_key] = files[old_key]
 
+        # Files may exist in the temp dir (from zip extraction) even if the
+        # manifest's files dict doesn't reference them (e.g. old corrupted
+        # WSPs where ti1/ti2/ti3 were lost from the manifest on a bad save).
+        # Scan the temp dir for known working file types and fill in any
+        # missing roles so the pages can still be restored.
+        if self._session.target_path is not None:
+            for role, suffix in (
+                ("ti1", ".ti1"),
+                ("ti2", ".ti2"),
+                ("ti3", ".ti3"),
+            ):
+                if role not in files:
+                    candidate = self._session.target_path.with_suffix(suffix)
+                    if candidate.exists():
+                        files[role] = candidate
+
         # Reset all pages before restoring state from the new session.
         self._pages["Measure"].reset_state()
         self._pages["Profile"].ti3_edit.clear()
@@ -251,27 +267,26 @@ class Wizard(QWidget):
                 "ti3": files.get("ti3"),
                 "icc": files.get("icc"),
             }
-            if profile_configs:
-                opt_page.set_original_pass_data(
-                    generate_config=gen_config,
-                    profile_config=profile_configs[-1],
-                    files={k: v for k, v in opt_files.items() if v is not None},
-                )
-                # Also restore optimisation passes from the manifest
-                opt_page._generate_config = dict(gen_config)
-                opt_page._profile_configs = list(profile_configs)
-                opt_page._optimisation_passes = []
-                opt_page._combined_ti3s = []
-                for i in range(1, manifest.get("optimisation_count", 0) + 1):
-                    opt_page._optimisation_passes.append({
-                        "ti1": files.get(f"pass{i}_ti1"),
-                        "ti2": files.get(f"pass{i}_ti2"),
-                        "ti3": files.get(f"pass{i}_ti3"),
-                        "icc": files.get(f"pass{i}_icc"),
-                    })
-                    combined = files.get(f"combined{i}_ti3")
-                    if combined:
-                        opt_page._combined_ti3s.append(combined)
+            opt_page.set_original_pass_data(
+                generate_config=gen_config,
+                profile_config=profile_configs[-1] if profile_configs else {},
+                files={k: v for k, v in opt_files.items() if v is not None},
+            )
+            # Also restore optimisation passes from the manifest
+            opt_page._generate_config = dict(gen_config)
+            opt_page._profile_configs = list(profile_configs)
+            opt_page._optimisation_passes = []
+            opt_page._combined_ti3s = []
+            for i in range(1, manifest.get("optimisation_count", 0) + 1):
+                opt_page._optimisation_passes.append({
+                    "ti1": files.get(f"pass{i}_ti1"),
+                    "ti2": files.get(f"pass{i}_ti2"),
+                    "ti3": files.get(f"pass{i}_ti3"),
+                    "icc": files.get(f"pass{i}_icc"),
+                })
+                combined = files.get(f"combined{i}_ti3")
+                if combined:
+                    opt_page._combined_ti3s.append(combined)
 
         # Decide which step to show.
         has_icc = files.get("icc") is not None and Path(str(files["icc"])).exists()
@@ -418,8 +433,14 @@ class Wizard(QWidget):
         prof_page = self._pages["Profile"]
         opt_page = self._pages["Optimise"]
 
-        # Build the file manifest
-        file_paths = self._collect_session_files(include_icc=icc_path)
+        # Build the file manifest. Derive the ti3 path from the
+        # workspace (target stem is always "session" — see
+        # GeneratePage._on_generate) so that ti1/ti2/ti3/tiff files
+        # are always included regardless of MeasurementPage runtime
+        # state.
+        target = self._session.target_path
+        ti3_path = target.with_suffix(".ti3") if target else None
+        file_paths = self._collect_session_files(include_icc=icc_path, ti3_path=ti3_path)
 
         generate_config = gen_page.get_generate_config()
         profile_config = prof_page.get_profile_config()
@@ -489,7 +510,8 @@ class Wizard(QWidget):
             target = self._session.target_path
             icc_path = target.with_suffix(".icc") if target is not None else None
             if icc_path is not None and icc_path.exists():
-                file_paths = self._collect_session_files(include_icc=icc_path)
+                ti3_path = icc_path.with_suffix(".ti3")
+                file_paths = self._collect_session_files(include_icc=icc_path, ti3_path=ti3_path)
                 profile_configs = [prof_page.get_profile_config()]
                 optimisation_count = 0
             else:
@@ -618,6 +640,13 @@ class Wizard(QWidget):
         if ti3_path is None:
             ti3_path = self._pages["Measure"].get_current_ti3_path()
 
+        if ti3_path is None:
+            target = self._session.target_path
+            if target is not None:
+                candidate = target.with_suffix(".ti3")
+                if candidate.exists():
+                    ti3_path = candidate
+
         if ti3_path is not None:
             work_dir = ti3_path.parent
             stem = ti3_path.stem
@@ -685,6 +714,7 @@ class Wizard(QWidget):
             if self._pending_ti2.exists():
                 page.load_ti2(self._pending_ti2)
             self._pending_ti2 = None
+        page = self.stack.widget(index)
         if page is self._pages["Profile"]:
             ti3_path = self._pages["Measure"].get_current_ti3_path()
             if ti3_path:

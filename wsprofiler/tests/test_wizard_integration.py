@@ -251,9 +251,10 @@ def test_wizard_load_wsp_session_restores_state(tmp_path: Path, qapp):
     wiz2 = _wizard_with_suppressed_dialogs(tmp_path)
     try:
         wiz2.load_wsp_session(wsp_path)
-        # The session should be marked as loaded, with the same WSP path.
         assert wiz2.session.is_loaded
+        # Auto-saves overwrite the source WSP.
         assert wiz2.session.wsp_path == wsp_path
+        assert wiz2.session.wsp_path is not None
         # Wizard should have landed on the Optimise page (ICC exists).
         assert wiz2.stack.currentWidget() is wiz2._pages["Optimise"]
     finally:
@@ -375,6 +376,7 @@ def test_wizard_session_manager_button_triggers_load(tmp_path: Path, monkeypatch
         wiz2._on_load_session_clicked()
         assert wiz2.session.is_loaded
         assert wiz2.session.wsp_path == wsp_path
+        assert wiz2.session.wsp_path is not None
     finally:
         wiz2.session.cleanup()
 
@@ -660,5 +662,121 @@ def test_load_wsp_session_does_not_restore_precond_to_ui(tmp_path: Path, qapp):
         # But the manifest still records which precond was used.
         manifest, names = _read_manifest(wsp_path)
         assert "precond_icc" in manifest["files"]
+    finally:
+        wiz2.session.cleanup()
+
+
+# ------------------------------------------------------- load-resave round-trip (BUG 1-4)
+
+def test_load_profile_done_wsp_resaves_all_files(tmp_path: Path, qapp):
+    """Load a profile-done WSP, trigger save, and verify ti1/ti2/ti3/icc/tiffs survive."""
+    dest = tmp_path / "output" / "myprinter.icc"
+    wiz1 = _wizard_with_suppressed_dialogs(tmp_path, dest=dest)
+    try:
+        _make_chart_files(wiz1, with_ti3=True, with_icc=True)
+        wiz1._on_chart_generated(wiz1.session.target_path.with_suffix(".ti2"))
+        wiz1._on_measurements_complete(wiz1.session.target_path.with_suffix(".ti3"))
+        wiz1._on_profile_generated(wiz1.session.target_path.with_suffix(".icc"))
+        wsp_path = wiz1.session.wsp_path
+    finally:
+        wiz1.session.cleanup()
+
+    wiz2 = _wizard_with_suppressed_dialogs(tmp_path)
+    try:
+        wiz2.load_wsp_session(wsp_path)
+        # Simulate navigation away from Measure (triggers save_session_state)
+        wiz2._prev_step_index = list(wiz2._pages.keys()).index("Measure")
+        wiz2.save_session_state()
+
+        manifest, names = _read_manifest(wiz2.session.wsp_path)
+        stem = wiz2.session.target_stem
+        assert f"{stem}.ti1" in names
+        assert f"{stem}.ti2" in names
+        assert f"{stem}.ti3" in names
+        assert f"{stem}.icc" in names
+        assert f"{stem}_01.tif" in names
+        assert f"{stem}_02.tif" in names
+        assert manifest["profile_configs"], "profile_configs should survive"
+        assert manifest["optimisation_count"] == 0
+    finally:
+        wiz2.session.cleanup()
+
+
+def test_load_wsp_with_empty_profile_configs_resaves_all_files(tmp_path: Path, qapp):
+    """An old/buggy WSP with ICC but empty profile_configs must not lose files on resave."""
+    import json
+    import zipfile
+
+    wsp = tmp_path / "buggy_session.wsp"
+    chart_dir = tmp_path / "charts"
+    chart_dir.mkdir()
+    stem = "session"
+    (chart_dir / f"{stem}.ti1").write_text("ti1")
+    (chart_dir / f"{stem}.ti2").write_text("ti2")
+    (chart_dir / f"{stem}.ti3").write_text("ti3")
+    (chart_dir / f"{stem}.icc").write_text("icc")
+    (chart_dir / f"{stem}_01.tif").write_text("tiff1")
+    manifest = {
+        "version": 1,
+        "wizard_type": "simple",
+        "target_name": stem,
+        "workspace": str(chart_dir),
+        "generated_at": "2026-06-30T12:00:00+00:00",
+        "files": {
+            "ti1": f"{stem}.ti1",
+            "ti2": f"{stem}.ti2",
+            "ti3": f"{stem}.ti3",
+            "icc": f"{stem}.icc",
+            "tiff_1": f"{stem}_01.tif",
+        },
+        "generate_config": {},
+        "profile_configs": [],
+        "optimisation_count": 0,
+        "measurement_complete": True,
+    }
+    with zipfile.ZipFile(wsp, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        for _, arcname in manifest["files"].items():
+            zf.write(chart_dir / arcname, arcname)
+
+    wiz = _wizard_with_suppressed_dialogs(tmp_path)
+    try:
+        wiz.load_wsp_session(wsp)
+        wiz._prev_step_index = list(wiz._pages.keys()).index("Measure")
+        wiz.save_session_state()
+
+        manifest2, names = _read_manifest(wiz.session.wsp_path)
+        assert f"{stem}.ti1" in names
+        assert f"{stem}.ti2" in names
+        assert f"{stem}.ti3" in names
+        assert f"{stem}.icc" in names
+        assert f"{stem}_01.tif" in names
+        assert manifest2.get("profile_configs") == []
+    finally:
+        wiz.session.cleanup()
+
+
+def test_load_wsp_preserves_filename_stem(tmp_path: Path, qapp):
+    """Loading a WSP should base the auto-save path on the original filename."""
+    import shutil
+
+    dest = tmp_path / "output" / "myprinter.icc"
+    wiz1 = _wizard_with_suppressed_dialogs(tmp_path, dest=dest)
+    try:
+        _make_chart_files(wiz1, with_ti3=True, with_icc=True)
+        wiz1._on_chart_generated(wiz1.session.target_path.with_suffix(".ti2"))
+        wiz1._on_measurements_complete(wiz1.session.target_path.with_suffix(".ti3"))
+        wiz1._on_profile_generated(wiz1.session.target_path.with_suffix(".icc"))
+        custom_wsp = tmp_path / "my_special_session.wsp"
+        shutil.copy(wiz1.session.wsp_path, custom_wsp)
+    finally:
+        wiz1.session.cleanup()
+
+    wiz2 = _wizard_with_suppressed_dialogs(tmp_path)
+    try:
+        wiz2.load_wsp_session(custom_wsp)
+        assert wiz2.session.wsp_path is not None
+        assert wiz2.session.wsp_path != custom_wsp
+        assert "my_special_session" in wiz2.session.wsp_path.name
     finally:
         wiz2.session.cleanup()

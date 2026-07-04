@@ -39,3 +39,7 @@ There is **no lint, typecheck, or formatter config** in this repo. Do not invent
 ## External prerequisite
 
 Argyll CMS binaries must be installed and on `PATH`: `targen`, `printtarg`, `chartread`, `colprof`, `xicclu` (see https://www.argyllcms.com). `pywin32` is a Windows-only dependency declared in `pyproject.toml`.
+
+## CI
+
+The GitHub Actions workflows (`build-linux.yml`, `build-windows.yml`) only build standalone executables with PyInstaller. They do **not** run tests.

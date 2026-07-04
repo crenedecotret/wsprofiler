@@ -135,13 +135,15 @@ class SessionManager:
 
         Returns (manifest, files, temp_dir). The temp_dir is also stored
         on the instance and is the working directory for all pages.
+        Auto-saves go to a new path derived from the source filename so
+        the original WSP is never overwritten.
         """
         self._cleanup_old_sessions()
         self.cleanup()
         self._temp_dir = Path(tempfile.mkdtemp(prefix="wsprofiler_wsp_"))
         manifest, files = load_archive(wsp_path, self._temp_dir)
         self._source_wsp = wsp_path
-        self._wsp_path = wsp_path  # auto-save overwrites the loaded file
+        self._wsp_path = self._compute_default_wsp_path()
         self._is_loaded = True
         return manifest, files, self._temp_dir
 
@@ -205,8 +207,14 @@ class SessionManager:
         """Return the default WSP save path with target name and date."""
         sessions_dir = self.default_sessions_dir
         sessions_dir.mkdir(parents=True, exist_ok=True)
-        date_str = datetime.now().strftime("%Y%m%d")
-        candidate = sessions_dir / f"{self._target_stem}_{date_str}.wsp"
+        if self._source_wsp is not None:
+            stem = self._source_wsp.stem
+        else:
+            date_str = datetime.now().strftime("%Y%m%d")
+            stem = f"{self._target_stem}_{date_str}"
+        candidate = sessions_dir / f"{stem}.wsp"
+        if self._source_wsp is not None:
+            return candidate  # overwrite the loaded session
         if not candidate.exists():
             return candidate
         return _auto_increment_path(candidate)
