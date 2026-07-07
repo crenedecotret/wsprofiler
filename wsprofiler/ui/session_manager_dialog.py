@@ -54,7 +54,7 @@ class SessionManagerDialog(QDialog):
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet("font-size: 14px; color: #8a8ea0;")
         self._empty_label.setVisible(False)
-        layout.addWidget(self._empty_label)
+        layout.addWidget(self._empty_label, stretch=1)
 
         # Table
         self._table = QTableWidget()
@@ -67,6 +67,7 @@ class SessionManagerDialog(QDialog):
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setAlternatingRowColors(True)
+        self._table.horizontalHeader().setHighlightSections(False)
         self._table.setColumnWidth(0, 180)
         self._table.setColumnWidth(1, 140)
         self._table.setColumnWidth(2, 160)
@@ -198,7 +199,10 @@ class SessionManagerDialog(QDialog):
         if has_icc and optimisation_count == 0:
             return "Complete profile"
         if has_icc and optimisation_count > 0:
-            return "Optimised profile"
+            last_pass_icc = f"pass{optimisation_count}_icc"
+            if last_pass_icc in files:
+                return "Optimised profile"
+            return "Optimising (in progress)"
         return "Read chart"
 
     @staticmethod

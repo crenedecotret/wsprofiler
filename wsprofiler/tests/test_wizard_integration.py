@@ -42,7 +42,7 @@ def _wizard_with_suppressed_dialogs(
         # set the text, then call _initialise_session() manually so
         # the destination is captured. This avoids building pages twice.
         wiz = Wizard.__new__(Wizard)
-        from PySide6.QtWidgets import QHBoxLayout, QListWidget, QStackedWidget
+        from PySide6.QtWidgets import QHBoxLayout, QTreeWidget, QTreeWidgetItem, QStackedWidget
         from wsprofiler.session_manager import SessionManager
         QWidget = __import__("PySide6.QtWidgets", fromlist=["QWidget"]).QWidget
         QVBoxLayout = __import__("PySide6.QtWidgets", fromlist=["QVBoxLayout"]).QVBoxLayout
@@ -56,6 +56,8 @@ def _wizard_with_suppressed_dialogs(
         wiz.workspace = workspace
         wiz._session = SessionManager()
         wiz._suppress_dialogs = True
+        wiz._prev_step_index = 0
+        wiz._measurement_complete = False
         wiz._pending_ti2 = None
 
         # Replicate __init__'s layout / pages setup
@@ -68,8 +70,10 @@ def _wizard_with_suppressed_dialogs(
         left_lyt = QVBoxLayout(left)
         left_lyt.setContentsMargins(0, 0, 0, 0)
         left_lyt.setSpacing(4)
-        wiz.steps = QListWidget()
+        wiz.steps = QTreeWidget()
+        wiz.steps.setHeaderHidden(True)
         wiz.steps.setAlternatingRowColors(True)
+        wiz.steps.setItemsExpandable(False)
         left_lyt.addWidget(wiz.steps, stretch=1)
         from PySide6.QtWidgets import QPushButton
         wiz._load_session_btn = QPushButton("Session Manager")
@@ -85,12 +89,18 @@ def _wizard_with_suppressed_dialogs(
             "Profile": ProfilePage(workspace=workspace),
             "Optimise": OptimisePage(workspace=workspace),
         }
-        from PySide6.QtWidgets import QListWidgetItem
+        wiz._tree_items = {}
         for title, page in wiz._pages.items():
-            QListWidgetItem(title, wiz.steps)
+            item = QTreeWidgetItem(wiz.steps, [title])
             wiz.stack.addWidget(page)
-        wiz.steps.currentRowChanged.connect(wiz._on_step_changed)
-        wiz.steps.setCurrentRow(list(wiz._pages.keys()).index("Generate"))
+            if title == "Optimise":
+                for sub_title in ("Generate", "Measure", "Profile"):
+                    sub_item = QTreeWidgetItem(item, [sub_title])
+                    wiz._tree_items[("Optimise", sub_title)] = sub_item
+                item.setExpanded(True)
+            wiz._tree_items[(title,)] = item
+        wiz.steps.currentItemChanged.connect(wiz._on_current_item_changed)
+        wiz.steps.setCurrentItem(wiz._tree_items[("Generate",)])
 
         # Set the destination BEFORE initialising the session so it
         # gets captured.
@@ -102,8 +112,13 @@ def _wizard_with_suppressed_dialogs(
 
         wiz._pages["Generate"].chartGenerated.connect(wiz._on_chart_generated)
         wiz._pages["Measure"].measurementsComplete.connect(wiz._on_measurements_complete)
+        wiz._pages["Measure"].measurementStopped.connect(wiz._on_measurement_stopped)
         wiz._pages["Profile"].profileGenerated.connect(wiz._on_profile_generated)
         wiz._pages["Optimise"].optimisationComplete.connect(wiz._on_optimisation_complete)
+        wiz._pages["Optimise"].passChartsGenerated.connect(wiz._on_pass_charts_generated)
+        wiz._pages["Optimise"].subStepChanged.connect(wiz._on_optimise_substep_changed)
+        wiz._pages["Optimise"].optMeasurementsComplete.connect(wiz._on_opt_measurements_complete)
+        wiz._pages["Optimise"].optMeasurementStopped.connect(wiz._on_opt_measurement_stopped)
         return wiz
     else:
         wiz = Wizard(workspace=workspace)
@@ -127,8 +142,9 @@ def _make_chart_files(wizard, with_ti3: bool = False, with_icc: bool = False):
 
 
 def _item_is_enabled(wizard, title: str) -> bool:
-    idx = list(wizard._pages.keys()).index(title)
-    item = wizard.steps.item(idx)
+    item = wizard._tree_items.get((title,))
+    if item is None:
+        return False
     return bool(item.flags() & Qt.ItemIsEnabled)
 
 
@@ -780,3 +796,180 @@ def test_load_wsp_preserves_filename_stem(tmp_path: Path, qapp):
         assert "my_special_session" in wiz2.session.wsp_path.name
     finally:
         wiz2.session.cleanup()
+
+
+# --------------------------------------------------- auto-save at optimise sub-steps
+
+def test_auto_save_after_opt_generate(tmp_path: Path, qapp):
+    """Auto-save is triggered when optimisation chart is generated."""
+    dest = tmp_path / "output" / "myprinter.icc"
+    wiz = _wizard_with_suppressed_dialogs(tmp_path, dest=dest)
+    try:
+        _make_chart_files(wiz, with_ti3=True, with_icc=True)
+        wiz._on_chart_generated(wiz.session.target_path.with_suffix(".ti2"))
+        wiz._on_measurements_complete(wiz.session.target_path.with_suffix(".ti3"))
+        icc = wiz.session.target_path.with_suffix(".icc")
+        icc.write_text("icc data")
+        wiz._on_profile_generated(icc)
+
+        opt = wiz._pages["Optimise"]
+        # Simulate chart generation for pass 1
+        opt._optimisation_passes.append({"ti1": None, "ti2": None, "ti3": None, "icc": None})
+        # Create a dummy ti2 to trigger chart-generated flow
+        ti2 = wiz.session.target_path.with_suffix(".ti2")
+        wiz._on_pass_charts_generated(ti2, 1)
+        # WSP should exist and contain optimisation data
+        assert wiz.session.wsp_path.exists()
+        manifest, names = _read_manifest(wiz.session.wsp_path)
+        assert manifest["optimisation_count"] == 1
+    finally:
+        wiz.session.cleanup()
+
+
+def test_auto_save_after_opt_measure_complete(tmp_path: Path, qapp):
+    """Auto-save is triggered when optimisation measurements complete."""
+    dest = tmp_path / "output" / "myprinter.icc"
+    wiz = _wizard_with_suppressed_dialogs(tmp_path, dest=dest)
+    try:
+        _make_chart_files(wiz, with_ti3=True, with_icc=True)
+        wiz._on_chart_generated(wiz.session.target_path.with_suffix(".ti2"))
+        wiz._on_measurements_complete(wiz.session.target_path.with_suffix(".ti3"))
+        icc = wiz.session.target_path.with_suffix(".icc")
+        icc.write_text("icc data")
+        wiz._on_profile_generated(icc)
+
+        opt = wiz._pages["Optimise"]
+        opt._optimisation_passes.append({"ti1": None, "ti2": None, "ti3": None, "icc": None})
+
+        # Trigger opt measure complete
+        ti3 = wiz.session.target_path.with_suffix(".ti3")
+        opt._on_measurements_complete(ti3)
+        # Verify the pass is still there after the signal chain
+        assert len(opt._optimisation_passes) == 1
+        manifest, names = _read_manifest(wiz.session.wsp_path)
+        assert manifest["optimisation_count"] == 1
+    finally:
+        wiz.session.cleanup()
+
+
+def test_auto_save_after_opt_measurement_stopped(tmp_path: Path, qapp):
+    """Auto-save is triggered when optimisation measurements stop (partial)."""
+    dest = tmp_path / "output" / "myprinter.icc"
+    wiz = _wizard_with_suppressed_dialogs(tmp_path, dest=dest)
+    try:
+        _make_chart_files(wiz, with_ti3=True, with_icc=True)
+        wiz._on_chart_generated(wiz.session.target_path.with_suffix(".ti2"))
+        wiz._on_measurements_complete(wiz.session.target_path.with_suffix(".ti3"))
+        icc = wiz.session.target_path.with_suffix(".icc")
+        icc.write_text("icc data")
+        wiz._on_profile_generated(icc)
+
+        wiz._on_opt_measurement_stopped()
+        assert wiz.session.wsp_path.exists()
+    finally:
+        wiz.session.cleanup()
+
+
+def test_load_wsp_with_in_progress_optimisation(tmp_path: Path, qapp):
+    """Load WSP where optimisation chart is generated but not measured."""
+    import json, zipfile
+
+    wsp = tmp_path / "in_progress_opt.wsp"
+    chart_dir = tmp_path / "charts"
+    chart_dir.mkdir()
+    stem = "session"
+    (chart_dir / f"{stem}.ti2").write_text("ti2")
+    (chart_dir / f"{stem}.ti3").write_text("ti3")
+    (chart_dir / f"{stem}.icc").write_text("icc")
+    (chart_dir / f"{stem}_opt1.ti2").write_text("opt1 ti2")
+    manifest = {
+        "version": 1, "wizard_type": "simple",
+        "target_name": stem,
+        "workspace": str(chart_dir),
+        "generated_at": "2026-07-04T12:00:00+00:00",
+        "files": {
+            "ti2": f"{stem}.ti2",
+            "ti3": f"{stem}.ti3",
+            "icc": f"{stem}.icc",
+            "pass1_ti2": f"{stem}_opt1.ti2",
+        },
+        "generate_config": {"device": "i1", "paper": "A3"},
+        "profile_configs": [{"quality": "h"}],
+        "optimisation_count": 1,
+        "measurement_complete": True,
+    }
+    with zipfile.ZipFile(wsp, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        for _, arcname in manifest["files"].items():
+            zf.write(chart_dir / arcname, arcname)
+
+    wiz = _wizard_with_suppressed_dialogs(tmp_path)
+    try:
+        wiz.load_wsp_session(wsp)
+        opt = wiz._pages["Optimise"]
+        assert len(opt._optimisation_passes) == 1
+        assert opt._optimisation_passes[0].get("ti2") is not None
+        assert opt._optimisation_passes[0].get("ti3") is None
+        # Should be on SUB_MEASURE
+        assert opt.current_substep() == opt.SUB_MEASURE
+    finally:
+        wiz.session.cleanup()
+
+
+def test_load_wsp_with_optimisation_done(tmp_path: Path, qapp):
+    """Load WSP where optimisation pass is fully complete (icc exists)."""
+    import json, zipfile
+
+    wsp = tmp_path / "opt_done.wsp"
+    chart_dir = tmp_path / "charts"
+    chart_dir.mkdir()
+    stem = "session"
+    (chart_dir / f"{stem}.ti2").write_text("ti2")
+    (chart_dir / f"{stem}.ti3").write_text("ti3")
+    (chart_dir / f"{stem}.icc").write_text("icc")
+    (chart_dir / f"{stem}_opt1.ti2").write_text("opt1 ti2")
+    (chart_dir / f"{stem}_opt1.ti3").write_text("opt1 ti3")
+    (chart_dir / f"{stem}_opt1.icc").write_text("opt1 icc")
+    manifest = {
+        "version": 1, "wizard_type": "simple",
+        "target_name": stem,
+        "workspace": str(chart_dir),
+        "generated_at": "2026-07-04T12:00:00+00:00",
+        "files": {
+            "ti2": f"{stem}.ti2",
+            "ti3": f"{stem}.ti3",
+            "icc": f"{stem}.icc",
+            "pass1_ti2": f"{stem}_opt1.ti2",
+            "pass1_ti3": f"{stem}_opt1.ti3",
+            "pass1_icc": f"{stem}_opt1.icc",
+        },
+        "generate_config": {"device": "i1", "paper": "A3"},
+        "profile_configs": [{"quality": "h"}],
+        "optimisation_count": 1,
+        "measurement_complete": True,
+    }
+    with zipfile.ZipFile(wsp, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        for _, arcname in manifest["files"].items():
+            zf.write(chart_dir / arcname, arcname)
+
+    wiz = _wizard_with_suppressed_dialogs(tmp_path)
+    try:
+        wiz.load_wsp_session(wsp)
+        opt = wiz._pages["Optimise"]
+        assert len(opt._optimisation_passes) == 1
+        assert opt._optimisation_passes[0].get("icc") is not None
+        # Should be on SUB_PROFILE PROF_DONE
+        assert opt.current_substep() == opt.SUB_PROFILE
+        assert opt._prof_stack.currentIndex() == opt.PROF_DONE
+    finally:
+        wiz.session.cleanup()
+
+
+def test_single_optimisation_no_optimise_again_button(tmp_path: Path, qapp):
+    """Optimise page should not have an 'Optimise Again' button."""
+    from wsprofiler.ui.pages.optimise_page import OptimisePage
+
+    _ensure_app()
+    page = OptimisePage(workspace=tmp_path)
+    assert not hasattr(page, "_optimise_again_btn")

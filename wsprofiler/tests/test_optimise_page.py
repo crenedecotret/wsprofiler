@@ -201,3 +201,96 @@ def test_latest_icc_and_ti3(tmp_path: Path):
 
     assert page._latest_icc_path() == tmp_path / "opt1.icc"
     assert page._latest_ti3_path() == tmp_path / "opt1.ti3"
+
+
+def test_optimise_page_load_wsp_restores_ti2_to_meas_page(tmp_path: Path):
+    """load_wsp_session with ti2 but no ti3 loads ti2 into embedded meas page."""
+    from wsprofiler.ui.pages.optimise_page import OptimisePage
+    from wsprofiler.session import save_session, SimpleSnapshot, WIZARD_TYPE_SIMPLE
+
+    _ensure_app()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    (workspace / "mytarget.ti2").write_text("ti2")
+    (workspace / "mytarget.icc").write_text("icc")
+    (workspace / "mytarget_opt1.ti2").write_text("opt1 ti2")
+
+    snapshot = SimpleSnapshot(
+        version=1,
+        wizard_type=WIZARD_TYPE_SIMPLE,
+        target_name="mytarget",
+        workspace=str(workspace),
+        generate_config={"device": "i1", "paper": "A3", "pages": 1},
+        profile_configs=[
+            {"gamut_profile": None, "quality": "High", "smoothing": 0.5, "description": "Original"}
+        ],
+        optimisation_count=1,
+    )
+    file_paths = {
+        "ti2": workspace / "mytarget.ti2",
+        "icc": workspace / "mytarget.icc",
+        "pass1_ti2": workspace / "mytarget_opt1.ti2",
+    }
+    wsp = tmp_path / "mytarget.wsp"
+    save_session(wsp, snapshot, workspace, file_paths)
+
+    page = OptimisePage(workspace=workspace)
+    page.load_wsp_session(wsp)
+    assert page._meas_page._current_chart_path == workspace / "mytarget_opt1.ti2"
+
+
+def test_on_measurements_complete_emits_opt_measurements_complete(tmp_path: Path):
+    """_on_measurements_complete emits optMeasurementsComplete signal."""
+    from wsprofiler.ui.pages.optimise_page import OptimisePage
+
+    _ensure_app()
+    page = OptimisePage(workspace=tmp_path)
+    page._optimisation_passes.append({"ti1": None, "ti2": None, "ti3": None, "icc": None})
+
+    emitted = []
+
+    def handler(ti3_path):
+        emitted.append(ti3_path)
+
+    page.optMeasurementsComplete.connect(handler)
+    ti3 = tmp_path / "measurements.ti3"
+    ti3.write_text("data")
+    page._on_measurements_complete(ti3)
+    assert len(emitted) == 1
+    assert emitted[0] == ti3
+
+
+def test_embedded_meas_stopped_relays_to_wizard(tmp_path: Path):
+    """_on_embedded_meas_stopped emits optMeasurementStopped when not done."""
+    from wsprofiler.ui.pages.optimise_page import OptimisePage
+
+    _ensure_app()
+    page = OptimisePage(workspace=tmp_path)
+    emitted = []
+
+    def handler():
+        emitted.append(True)
+
+    page.optMeasurementStopped.connect(handler)
+    page._opt_meas_done = False
+    page._on_embedded_meas_stopped()
+    assert len(emitted) == 1
+
+
+def test_embedded_meas_stopped_suppressed_on_complete(tmp_path: Path):
+    """_on_embedded_meas_stopped suppresses emission when _opt_meas_done is True."""
+    from wsprofiler.ui.pages.optimise_page import OptimisePage
+
+    _ensure_app()
+    page = OptimisePage(workspace=tmp_path)
+    emitted = []
+
+    def handler():
+        emitted.append(True)
+
+    page.optMeasurementStopped.connect(handler)
+    page._opt_meas_done = True
+    page._on_embedded_meas_stopped()
+    assert len(emitted) == 0
+    assert page._opt_meas_done is False

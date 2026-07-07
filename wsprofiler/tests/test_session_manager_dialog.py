@@ -108,7 +108,8 @@ def test_step_inference(tmp_path: Path):
         "read": "Read chart",
         "prof": "Generate profile",
         "complete": "Complete profile",
-        "opt": "Optimised profile",
+        "opt_done": "Optimised profile",
+        "opt": "Optimising (in progress)",
         "old_read": "Read chart",
     }
     _make_wsp(tmp_path, "gen", files={}, mtime=1_000_000)
@@ -124,6 +125,13 @@ def test_step_inference(tmp_path: Path):
         "complete",
         files={"ti2": "x.ti2", "ti3": "x.ti3", "icc": "x.icc"},
         mtime=700_000,
+    )
+    _make_wsp(
+        tmp_path,
+        "opt_done",
+        files={"ti2": "x.ti2", "ti3": "x.ti3", "icc": "x.icc", "pass1_icc": "x_opt1.icc"},
+        optimisation_count=1,
+        mtime=650_000,
     )
     _make_wsp(
         tmp_path,

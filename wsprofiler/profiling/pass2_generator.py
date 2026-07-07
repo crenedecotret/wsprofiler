@@ -461,7 +461,7 @@ def score_candidates(
     score = (
         1.0 * novelty
         + 0.5 * region_undercoverage
-        + 0.3 * neutrality_bonus
+        +         0.5 * neutrality_bonus
         + 0.3 * luma_bonus
     )
     return score

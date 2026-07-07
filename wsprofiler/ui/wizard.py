@@ -6,11 +6,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -40,8 +40,8 @@ class Wizard(QWidget):
         # non-dialog side effects (auto-save, page transitions) still run.
         self._suppress_dialogs: bool = False
         # Wizard navigation state. These MUST be initialised before the
-        # steps.currentRowChanged signal is connected below, otherwise the
-        # first setCurrentRow() call fires _on_step_changed which reads
+        # steps.currentItemChanged signal is connected below, otherwise the
+        # first setCurrentItem() call fires _on_current_item_changed which reads
         # _prev_step_index and crashes with AttributeError.
         self._prev_step_index: int = 0
         self._measurement_complete: bool = False
@@ -58,8 +58,11 @@ class Wizard(QWidget):
         left_lyt.setContentsMargins(0, 0, 0, 0)
         left_lyt.setSpacing(4)
 
-        self.steps = QListWidget()
+        self.steps = QTreeWidget()
+        self.steps.setHeaderHidden(True)
         self.steps.setAlternatingRowColors(True)
+        self.steps.setItemsExpandable(False)  # suppress expand/collapse arrows
+        self.steps.setIndentation(12)  # compact indent for sub-items
         # Stretch factor 1 makes the list expand to fill all available
         # vertical space; the Load Session button below gets its natural
         # size and stays pinned to the bottom of the sidebar.
@@ -85,12 +88,19 @@ class Wizard(QWidget):
             "Optimise": OptimisePage(workspace=workspace),
         }
 
+        self._tree_items: dict[str | tuple[str, str], QTreeWidgetItem] = {}
         for title, page in self._pages.items():
-            QListWidgetItem(title, self.steps)
+            item = QTreeWidgetItem(self.steps, [title])
             self.stack.addWidget(page)
+            if title == "Optimise":
+                for sub_title in ("Generate", "Measure", "Profile"):
+                    sub_item = QTreeWidgetItem(item, [sub_title])
+                    self._tree_items[("Optimise", sub_title)] = sub_item
+                item.setExpanded(True)
+            self._tree_items[(title,)] = item
 
-        self.steps.currentRowChanged.connect(self._on_step_changed)
-        self.steps.setCurrentRow(list(self._pages.keys()).index("Generate"))
+        self.steps.currentItemChanged.connect(self._on_current_item_changed)
+        self.steps.setCurrentItem(self._tree_items[("Generate",)])
 
         # The wizard always has a live session so the working directory
         # is ready before the first Generate click. The user can start
@@ -105,6 +115,9 @@ class Wizard(QWidget):
         self._pages["Profile"].profileGenerated.connect(self._on_profile_generated)
         self._pages["Optimise"].optimisationComplete.connect(self._on_optimisation_complete)
         self._pages["Optimise"].passChartsGenerated.connect(self._on_pass_charts_generated)
+        self._pages["Optimise"].subStepChanged.connect(self._on_optimise_substep_changed)
+        self._pages["Optimise"].optMeasurementsComplete.connect(self._on_opt_measurements_complete)
+        self._pages["Optimise"].optMeasurementStopped.connect(self._on_opt_measurement_stopped)
 
     # ------------------------------------------------------------ session
     @property
@@ -143,8 +156,7 @@ class Wizard(QWidget):
             self._pages["Optimise"]._original_pass = {}
             self._initialise_session()
             self._update_step_availability()
-            target_idx = list(self._pages.keys()).index("Generate")
-            self.steps.setCurrentRow(target_idx)
+            self.steps.setCurrentItem(self._tree_items[("Generate",)])
             return
         selected = dialog.selected_path()
         if selected:
@@ -302,10 +314,9 @@ class Wizard(QWidget):
             target_step = "Measure"
         else:
             target_step = "Generate"
-        target_index = list(self._pages.keys()).index(target_step)
         self._update_step_availability()
-        self.steps.setCurrentRow(target_index)
-        self._refresh_page_for_step(target_index)
+        self.steps.setCurrentItem(self._tree_items[(target_step,)])
+        self._refresh_page_for_step(list(self._pages.keys()).index(target_step))
 
     # ---------------------------------------------------------- callbacks
     def _on_chart_generated(self, ti2_path: Path) -> None:
@@ -325,11 +336,13 @@ class Wizard(QWidget):
         # Switch to measurement page after user clicks OK
         self._pending_ti2 = ti2_path
         self._update_step_availability()
-        measure_idx = list(self._pages.keys()).index("Measure")
-        self.steps.setCurrentRow(measure_idx)
+        self.steps.setCurrentItem(self._tree_items[("Measure",)])
 
     def _show_print_dialog(
-        self, ti2_path: Path, title: str = "Charts Ready for Printing"
+        self,
+        ti2_path: Path,
+        title: str = "Charts Ready for Printing",
+        stem_suffix: str = "",
     ) -> None:
         """Copy the TIFF chart pages to the ICC destination folder and
         show a rich-text dialog listing every file that must be printed."""
@@ -339,7 +352,7 @@ class Wizard(QWidget):
         if dest is not None:
             dest_dir = dest.parent
             dest_dir.mkdir(parents=True, exist_ok=True)
-            new_stem = dest.stem
+            new_stem = dest.stem + stem_suffix
             copied: list[Path] = []
             for i, src in enumerate(tiff_files, start=1):
                 dst_name = f"{new_stem}.tif" if len(tiff_files) == 1 else f"{new_stem}_{i}.tif"
@@ -380,10 +393,9 @@ class Wizard(QWidget):
 
     def _on_pass_charts_generated(self, ti2_path: Path, pass_num: int) -> None:
         """Show the print dialog for an optimisation pass chart."""
+        self._auto_save_after_opt_generate()
         if not self._suppress_dialogs:
-            self._show_print_dialog(
-                ti2_path, title=f"Optimisation Pass {pass_num} — Charts Ready for Printing"
-            )
+            self._show_print_dialog(ti2_path, stem_suffix="_opt")
 
     def _on_measurements_complete(self, ti3_path: Path) -> None:
         """Show dialog when all measurements are done, offer to go to Profile page."""
@@ -412,8 +424,7 @@ class Wizard(QWidget):
 
         if proceed_to_profile:
             self._update_step_availability()
-            profile_idx = list(self._pages.keys()).index("Profile")
-            self.steps.setCurrentRow(profile_idx)
+            self.steps.setCurrentItem(self._tree_items[("Profile",)])
 
     def _on_measurement_stopped(self) -> None:
         """Auto-save WSP whenever chartread stops (partial or full)."""
@@ -483,6 +494,31 @@ class Wizard(QWidget):
             optimisation_count=len(opt_page._optimisation_passes),
             measurement_complete=True,
         )
+
+    def _auto_save_after_opt_generate(self) -> None:
+        opt_page = self._pages["Optimise"]
+        file_paths = self._collect_optimisation_files(opt_page)
+        self._session.auto_save(
+            file_paths=file_paths,
+            generate_config=opt_page._generate_config,
+            profile_configs=list(opt_page._profile_configs),
+            optimisation_count=len(opt_page._optimisation_passes),
+            measurement_complete=self._measurement_complete,
+        )
+
+    def _on_opt_measurements_complete(self, ti3_path: Path) -> None:
+        opt_page = self._pages["Optimise"]
+        file_paths = self._collect_optimisation_files(opt_page)
+        self._session.auto_save(
+            file_paths=file_paths,
+            generate_config=opt_page._generate_config,
+            profile_configs=list(opt_page._profile_configs),
+            optimisation_count=len(opt_page._optimisation_passes),
+            measurement_complete=self._measurement_complete,
+        )
+
+    def _on_opt_measurement_stopped(self) -> None:
+        self.save_session_state()
 
     def save_session_state(self) -> None:
         """Snapshot the current session state and auto-save the WSP.
@@ -707,6 +743,29 @@ class Wizard(QWidget):
 
         return file_paths
 
+    def _tree_item_to_stack_index(self, item: QTreeWidgetItem) -> int:
+        """Resolve a tree item to the QStackedWidget index (0-3).
+
+        Main items map directly. Sub-items (Optimise children) all
+        map to index 3 (the Optimise page).
+        """
+        for title, ti in self._tree_items.items():
+            if ti is item:
+                if isinstance(title, tuple) and len(title) == 2:
+                    return list(self._pages.keys()).index("Optimise")
+                if isinstance(title, tuple):
+                    return list(self._pages.keys()).index(title[0])
+                return list(self._pages.keys()).index(title)
+        return 0
+
+    def _on_optimise_substep_changed(self, sub_idx: int) -> None:
+        """Sync the sidebar highlight to the active Optimise sub-step."""
+        sub_titles = ("Generate", "Measure", "Profile")
+        item = self._tree_items.get(("Optimise", sub_titles[sub_idx]))
+        if item and self.steps.currentItem() is not item:
+            self.steps.setCurrentItem(item)
+        self._update_step_availability()
+
     def _refresh_page_for_step(self, index: int) -> None:
         """Apply page-specific state (chart loading, ti3 path) for the given step."""
         page = self.stack.widget(index)
@@ -721,15 +780,22 @@ class Wizard(QWidget):
                 icc_dest = self._pages["Generate"].final_icc_destination
                 profile_name = icc_dest.stem if icc_dest else ""
                 page.set_ti3_path(ti3_path, profile_name=profile_name)
+        if page is self._pages["Optimise"]:
+            page.go_to_default_substep()
 
-    def _on_step_changed(self, index: int) -> None:
+    def _on_current_item_changed(
+        self, current: QTreeWidgetItem, previous: QTreeWidgetItem
+    ) -> None:
+        if current is None:
+            return
+        index = self._tree_item_to_stack_index(current)
         if self._prev_step_index == 1:
             self.save_session_state()
         self._prev_step_index = index
         self.stack.setCurrentIndex(index)
         self._refresh_page_for_step(index)
 
-    def _set_item_enabled(self, item: QListWidgetItem, enabled: bool) -> None:
+    def _set_item_enabled(self, item: QTreeWidgetItem, enabled: bool) -> None:
         flags = item.flags()
         if enabled:
             item.setFlags(flags | Qt.ItemIsEnabled)
@@ -738,8 +804,7 @@ class Wizard(QWidget):
 
     def _update_step_availability(self) -> None:
         """Enable sidebar steps based on completion state."""
-        titles = list(self._pages.keys())
-        items = [self.steps.item(i) for i in range(self.steps.count())]
+        opt_page = self._pages["Optimise"]
 
         # Generate is disabled once a chart has been generated (would break the chain)
         generate_available = True
@@ -749,9 +814,10 @@ class Wizard(QWidget):
             target = self._session.target_path
             if target is not None and target.with_suffix(".ti2").exists():
                 generate_available = False
-        self._set_item_enabled(items[0], generate_available)
-        items[0].setToolTip(
-            "" if generate_available else "Cannot change chart settings after generation"
+        gen_item = self._tree_items[("Generate",)]
+        self._set_item_enabled(gen_item, generate_available)
+        gen_item.setToolTip(
+            0, "" if generate_available else "Cannot change chart settings after generation"
         )
 
         # Measure available if ti2 exists
@@ -760,11 +826,10 @@ class Wizard(QWidget):
             target = self._session.target_path
             if target is not None:
                 measure_available = target.with_suffix(".ti2").exists()
-        self._set_item_enabled(
-            items[1], measure_available
-        )
-        items[1].setToolTip(
-            "" if measure_available else "Generate a chart first"
+        meas_item = self._tree_items[("Measure",)]
+        self._set_item_enabled(meas_item, measure_available)
+        meas_item.setToolTip(
+            0, "" if measure_available else "Generate a chart first"
         )
 
         # Profile available if ti3 exists
@@ -773,11 +838,10 @@ class Wizard(QWidget):
             target = self._session.target_path
             if target is not None:
                 profile_available = target.with_suffix(".ti3").exists()
-        self._set_item_enabled(
-            items[2], profile_available
-        )
-        items[2].setToolTip(
-            "" if profile_available else "Complete measurements first"
+        prof_item = self._tree_items[("Profile",)]
+        self._set_item_enabled(prof_item, profile_available)
+        prof_item.setToolTip(
+            0, "" if profile_available else "Complete measurements first"
         )
 
         # Optimise available if icc exists or OptimisePage has data
@@ -786,10 +850,33 @@ class Wizard(QWidget):
         if target is not None:
             optimise_available = target.with_suffix(".icc").exists()
         if not optimise_available:
-            optimise_available = self._pages["Optimise"].has_data()
-        self._set_item_enabled(
-            items[3], optimise_available
+            optimise_available = opt_page.has_data()
+        opt_item = self._tree_items[("Optimise",)]
+        self._set_item_enabled(opt_item, optimise_available)
+        opt_item.setToolTip(
+            0, "" if optimise_available else "Create a profile first"
         )
-        items[3].setToolTip(
-            "" if optimise_available else "Create a profile first"
-        )
+
+        # Sub-item gating
+        opt_gen = self._tree_items.get(("Optimise", "Generate"))
+        opt_meas = self._tree_items.get(("Optimise", "Measure"))
+        opt_prof = self._tree_items.get(("Optimise", "Profile"))
+        if opt_gen:
+            on_generate = opt_page.current_substep() == opt_page.SUB_GENERATE
+            gen_enabled = optimise_available and on_generate
+            self._set_item_enabled(opt_gen, gen_enabled)
+            opt_gen.setToolTip(
+                0, "" if gen_enabled else "Generate an add-on chart first" if optimise_available else "Create a profile first"
+            )
+        if opt_meas:
+            can_measure = optimise_available and opt_page.can_measure()
+            self._set_item_enabled(opt_meas, can_measure)
+            opt_meas.setToolTip(
+                0, "" if can_measure else "Generate an add-on chart first"
+            )
+        if opt_prof:
+            can_build = optimise_available and opt_page.can_build_profile()
+            self._set_item_enabled(opt_prof, can_build)
+            opt_prof.setToolTip(
+                0, "" if can_build else "Complete measurements first"
+            )

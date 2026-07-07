@@ -1,13 +1,13 @@
-"""Optimise page: generate add-on charts and build improved profiles.
+"""Optimise page: generate an add-on chart and build an improved profile.
 
 This page is entered after the user has completed a full profile in the
-main wizard, or after loading a .wsp save state. It supports multiple
-optimisation passes, each generating a new add-on chart, measuring it,
-and combining all measurements into an improved profile.
+main wizard, or after loading a .wsp save state. It runs a single
+optimisation pass: generate an add-on chart, measure it, and combine all
+measurements into an improved profile. Legacy WSPs with multiple passes
+are still restored correctly.
 """
 from __future__ import annotations
 
-import os
 import shlex
 from pathlib import Path
 from typing import Any
@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QProgressDialog,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -109,14 +109,22 @@ class OptimisePage(QWidget):
 
     optimisationComplete = Signal(Path)
     passChartsGenerated = Signal(Path, int)
+    subStepChanged = Signal(int)
+    optMeasurementsComplete = Signal(Path)
+    optMeasurementStopped = Signal()
 
-    # internal state indices
-    STATE_NO_DATA = 0
-    STATE_READY = 1
-    STATE_GENERATING = 2
-    STATE_MEASURE = 3
-    STATE_BUILDING = 4
-    STATE_DONE = 5
+    # Sub-page indices (top-level stack)
+    SUB_GENERATE = 0
+    SUB_MEASURE = 1
+    SUB_PROFILE = 2
+
+    # Generate sub-states (within _gen_stack)
+    GEN_READY = 0
+
+    # Profile sub-states (within _prof_stack)
+    PROF_READY = 0
+    PROF_BUILDING = 1
+    PROF_DONE = 2
 
     def __init__(self, workspace: Path, parent=None) -> None:
         super().__init__(parent)
@@ -131,65 +139,47 @@ class OptimisePage(QWidget):
         self._optimisation_passes: list[dict[str, Path | None]] = []
         self._combined_ti3s: list[Path] = []
         self._target_stem: str = "session"
+        self._opt_meas_done: bool = False
 
         # -- UI -----------------------------------------------------------
         root = QVBoxLayout(self)
         root.setContentsMargins(23, 23, 23, 12)
         root.setSpacing(16)
 
-        title = QLabel("Optimise Profile")
-        title.setStyleSheet("font-size: 20px; font-weight: 600;")
-        root.addWidget(title)
+        self._title = QLabel("Optimise Profile (Generate Chart)")
+        self._title.setStyleSheet("font-size: 20px; font-weight: 600;")
+        root.addWidget(self._title)
 
         self._stack = QStackedWidget()
         root.addWidget(self._stack, stretch=1)
 
-        self._setup_no_data_page()
-        self._setup_ready_page()
-        self._setup_generating_page()
-        self._setup_measure_page()
-        self._setup_building_page()
-        self._setup_done_page()
+        # Build sub-pages (each manages its own console inline)
+        self._setup_generate_subpage()
+        self._setup_measure_subpage()
+        self._setup_profile_subpage()
 
-        # console
-        self._console = LogConsole()
-        self._console.setFixedHeight(180)
-        self._console.setVisible(False)
-        root.addWidget(self._console)
+        self._stack.setCurrentIndex(self.SUB_GENERATE)
 
-        self._show_console_check = QCheckBox("Show output")
-        self._show_console_check.setVisible(False)
-        self._show_console_check.toggled.connect(self._console.setVisible)
-        root.addWidget(self._show_console_check)
+    # ---------------------------------------------------------- sub-page setup
 
-        self._go_to_state(self.STATE_NO_DATA)
-
-    # ---------------------------------------------------------- page setup
-
-    def _setup_no_data_page(self) -> None:
+    def _setup_generate_subpage(self) -> None:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        msg = QLabel(
-            "No profile data loaded.\n\n"
-            "Complete a full profile first (Generate → Measure → Profile)."
-        )
-        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        msg.setStyleSheet("font-size: 14px; color: #8a8ea0;")
-        layout.addWidget(msg)
-
-        layout.addStretch(1)
-        self._stack.insertWidget(self.STATE_NO_DATA, page)
-
-    def _setup_ready_page(self) -> None:
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
+
+        self._gen_stack = QStackedWidget()
+        layout.addWidget(self._gen_stack)
+
+        # GEN_READY
+        ready_page = QWidget()
+        ready_layout = QVBoxLayout(ready_page)
+        ready_layout.setSpacing(12)
 
         self._status_label = QLabel()
         self._status_label.setStyleSheet("font-size: 14px;")
-        layout.addWidget(self._status_label)
+        self._status_label.setVisible(False)
+        ready_layout.addWidget(self._status_label)
 
         # --- Chart settings (mirror GeneratePage) ------------------------
         chart_group = QGroupBox("")
@@ -252,18 +242,76 @@ class OptimisePage(QWidget):
         self._summary_label.setStyleSheet("color: #8a8ea0; font-style: italic;")
         chart_form.addRow("", self._summary_label)
 
-        layout.addWidget(chart_group)
+        ready_layout.addWidget(chart_group)
 
-        self._generate_addon_btn = QPushButton("Generate Add-on Chart")
-        self._generate_addon_btn.setStyleSheet("font-weight: bold; min-height: 36px;")
+        self._gen_status = QLabel()
+        self._gen_status.setStyleSheet("color: #8a8ea0; font-style: italic;")
+        self._gen_status.setVisible(False)
+        ready_layout.addWidget(self._gen_status)
+
+        # Compact button row (like main Generate page)
+        self._generate_addon_btn = QPushButton("Generate")
         self._generate_addon_btn.clicked.connect(self._start_add_on_generation)
-        layout.addWidget(self._generate_addon_btn)
+        button_row = QHBoxLayout()
+        button_row.addWidget(self._generate_addon_btn)
+        button_row.addStretch()
+        ready_layout.addLayout(button_row)
 
-        self._build_profile_btn = QPushButton("Build Optimised Profile")
-        self._build_profile_btn.setStyleSheet("font-weight: bold; min-height: 36px;")
-        self._build_profile_btn.setEnabled(False)
-        self._build_profile_btn.clicked.connect(self._run_build_profile)
-        layout.addWidget(self._build_profile_btn)
+        ready_layout.addStretch(1)
+        self._gen_stack.insertWidget(self.GEN_READY, ready_page)
+
+        # Checkbox → preview → console (same order as main Generate page)
+        self._show_gen_console = QCheckBox("Show command preview and ArgyllCMS output")
+        self._show_gen_console.setVisible(True)
+        layout.addWidget(self._show_gen_console)
+
+        self._cmd_preview = QPlainTextEdit()
+        self._cmd_preview.setReadOnly(True)
+        self._cmd_preview.setMaximumHeight(80)
+        self._cmd_preview.setStyleSheet(
+            "font-family: monospace; background: #f4f4f4; color: #222;"
+        )
+        self._cmd_preview.setVisible(False)
+        self._show_gen_console.toggled.connect(self._cmd_preview.setVisible)
+        layout.addWidget(self._cmd_preview)
+
+        self._gen_console = LogConsole()
+        self._gen_console.setFixedHeight(180)
+        self._gen_console.setVisible(False)
+        self._show_gen_console.toggled.connect(self._gen_console.setVisible)
+        layout.addWidget(self._gen_console)
+
+        layout.addStretch(1)
+        self._stack.insertWidget(self.SUB_GENERATE, page)
+
+        # --- Wiring ------------------------------------------------------
+        self._instr_combo.currentIndexChanged.connect(self._on_instr_changed)
+        self._paper_combo.currentIndexChanged.connect(self._refresh_cmd_preview)
+        self._pages_spin.valueChanged.connect(self._refresh_cmd_preview)
+        self._dd_check.toggled.connect(self._refresh_cmd_preview)
+        self._nb_check.toggled.connect(self._refresh_cmd_preview)
+        self._refresh_cmd_preview()
+
+    def _setup_measure_subpage(self) -> None:
+        self._meas_page = MeasurementPage(self.workspace)
+        self._meas_page.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._meas_page.measurementsComplete.connect(self._on_measurements_complete)
+        self._meas_page.measurementStopped.connect(self._on_embedded_meas_stopped)
+        self._stack.insertWidget(self.SUB_MEASURE, self._meas_page)
+
+    def _setup_profile_subpage(self) -> None:
+        page = QWidget()
+        self._prof_stack = QStackedWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._prof_stack)
+
+        # PROF_READY
+        ready_page = QWidget()
+        ready_layout = QVBoxLayout(ready_page)
+        ready_layout.setSpacing(12)
 
         # Profile settings editor
         settings_group = QWidget()
@@ -298,85 +346,118 @@ class OptimisePage(QWidget):
         self._desc_edit = QLineEdit()
         settings_layout.addRow("Profile description:", self._desc_edit)
 
-        layout.addWidget(settings_group)
-        layout.addStretch(1)
-        self._stack.insertWidget(self.STATE_READY, page)
+        ready_layout.addWidget(settings_group)
 
-        # --- Wiring ------------------------------------------------------
-        self._instr_combo.currentIndexChanged.connect(self._on_instr_changed)
-        self._paper_combo.currentIndexChanged.connect(self._update_summary)
-        self._pages_spin.valueChanged.connect(self._update_summary)
-        self._dd_check.toggled.connect(self._update_summary)
-        self._nb_check.toggled.connect(self._update_summary)
-        self._gamut_browse.clicked.connect(self._browse_gamut_profile)
+        self._build_profile_btn = QPushButton("Build Optimised Profile")
+        self._build_profile_btn.setStyleSheet("font-weight: bold; min-height: 36px;")
+        self._build_profile_btn.setEnabled(False)
+        self._build_profile_btn.clicked.connect(self._run_build_profile)
+        ready_layout.addWidget(self._build_profile_btn)
 
-        self._discover_default_gamut()
+        self._show_prof_console = QCheckBox("Show ArgyllCMS output")
+        self._show_prof_console.setVisible(False)
+        ready_layout.addWidget(self._show_prof_console)
 
-    def _setup_generating_page(self) -> None:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._prof_console = LogConsole()
+        self._prof_console.setFixedHeight(180)
+        self._prof_console.setVisible(False)
+        self._show_prof_console.toggled.connect(self._prof_console.setVisible)
+        ready_layout.addWidget(self._prof_console)
 
-        self._gen_status = QLabel("Generating add-on chart…")
-        self._gen_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._gen_status.setStyleSheet("font-size: 18px; color: #555;")
-        layout.addWidget(self._gen_status)
+        ready_layout.addStretch(1)
+        self._prof_stack.insertWidget(self.PROF_READY, ready_page)
 
-        layout.addStretch(1)
-        self._stack.insertWidget(self.STATE_GENERATING, page)
+        # PROF_BUILDING
+        build_page = QWidget()
+        build_layout = QVBoxLayout(build_page)
+        build_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-    def _setup_measure_page(self) -> None:
-        self._meas_page = MeasurementPage(self.workspace)
-        self._meas_page.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        self._meas_page.measurementsComplete.connect(self._on_measurements_complete)
-        self._stack.insertWidget(self.STATE_MEASURE, self._meas_page)
-
-    def _setup_building_page(self) -> None:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self._build_status = QLabel("Building optimised profile…")
+        self._build_status = QLabel("Building optimised profile\u2026")
         self._build_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._build_status.setStyleSheet("font-size: 18px; color: #555;")
-        layout.addWidget(self._build_status)
+        build_layout.addWidget(self._build_status)
 
-        layout.addStretch(1)
-        self._stack.insertWidget(self.STATE_BUILDING, page)
+        build_layout.addStretch(1)
+        self._prof_stack.insertWidget(self.PROF_BUILDING, build_page)
 
-    def _setup_done_page(self) -> None:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # PROF_DONE
+        done_page = QWidget()
+        done_layout = QVBoxLayout(done_page)
+        done_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._done_label = QLabel("Optimisation complete!")
         self._done_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._done_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #1F8A4C;")
-        layout.addWidget(self._done_label)
+        done_layout.addWidget(self._done_label)
 
         self._done_path_label = QLabel()
         self._done_path_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._done_path_label.setStyleSheet("font-size: 14px; margin-top: 8px;")
-        layout.addWidget(self._done_path_label)
+        done_layout.addWidget(self._done_path_label)
 
-        self._optimise_again_btn = QPushButton("Optimise Again")
-        self._optimise_again_btn.clicked.connect(self._on_optimise_again)
-        layout.addWidget(self._optimise_again_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        done_layout.addStretch(1)
+        self._prof_stack.insertWidget(self.PROF_DONE, done_page)
 
-        layout.addStretch(1)
-        self._stack.insertWidget(self.STATE_DONE, page)
+        self._stack.insertWidget(self.SUB_PROFILE, page)
 
-    # ----------------------------------------------------------- state mgmt
+        # --- Wiring ------------------------------------------------------
+        self._gamut_browse.clicked.connect(self._browse_gamut_profile)
+        self._discover_default_gamut()
 
-    def _go_to_state(self, state: int) -> None:
-        self._stack.setCurrentIndex(state)
-        self._show_console_check.setVisible(
-            state in (self.STATE_GENERATING, self.STATE_BUILDING)
-        )
-        if state == self.STATE_NO_DATA:
-            self._status_label.setText("")
+    # ----------------------------------------------------------- sub-step mgmt
+
+    def go_to_substep(self, sub: int) -> None:
+        """Switch to a sub-page and emit the signal for the Wizard."""
+        self._stack.setCurrentIndex(sub)
+        self._title.setVisible(sub != self.SUB_MEASURE)
+        self.subStepChanged.emit(sub)
+
+    def go_to_default_substep(self) -> None:
+        """Determine the appropriate sub-step from pass data and switch to it."""
+        if not self._optimisation_passes:
+            self.go_to_substep(self.SUB_GENERATE)
+            return
+        latest = self._optimisation_passes[-1]
+        if latest.get("icc"):
+            # Profile has been built — show profile done
+            self._prof_stack.setCurrentIndex(self.PROF_DONE)
+            self.go_to_substep(self.SUB_PROFILE)
+        elif latest.get("ti3"):
+            # Measured but not built — show profile ready
+            self._prof_stack.setCurrentIndex(self.PROF_READY)
+            self.go_to_substep(self.SUB_PROFILE)
+        elif latest.get("ti2"):
+            # Chart generated but not measured — show measure page
+            ti2 = Path(str(latest["ti2"]))
+            if ti2.exists():
+                self._meas_page.load_ti2(ti2)
+            self.go_to_substep(self.SUB_MEASURE)
+        else:
+            self.go_to_substep(self.SUB_GENERATE)
+
+    def current_substep(self) -> int:
+        """Return the current sub-page index."""
+        return self._stack.currentIndex()
+
+    def can_measure(self) -> bool:
+        """Return True if a chart has been generated and is ready to measure."""
+        if not self._optimisation_passes:
+            return False
+        latest = self._optimisation_passes[-1]
+        ti2 = latest.get("ti2")
+        if ti2 and not latest.get("ti3"):
+            return Path(str(ti2)).exists()
+        return False
+
+    def can_build_profile(self) -> bool:
+        """Return True if measurement is done and profile can be built."""
+        if not self._optimisation_passes:
+            return False
+        latest = self._optimisation_passes[-1]
+        ti3 = latest.get("ti3")
+        if ti3:
+            return Path(str(ti3)).exists()
+        return False
 
     # ----------------------------------------------------------- public API
 
@@ -394,7 +475,8 @@ class OptimisePage(QWidget):
         self._combined_ti3s = []
         self._apply_settings_to_ui(profile_config)
         self._update_ready_status()
-        self._go_to_state(self.STATE_READY)
+        self._gen_stack.setCurrentIndex(self.GEN_READY)
+        self.go_to_substep(self.SUB_GENERATE)
 
     def has_data(self) -> bool:
         """Return True if the page has enough data to run an optimisation."""
@@ -439,8 +521,17 @@ class OptimisePage(QWidget):
         if self._profile_configs:
             self._apply_settings_to_ui(self._profile_configs[-1])
 
+        if self._optimisation_passes:
+            latest = self._optimisation_passes[-1]
+            ti2 = latest.get("ti2")
+            if ti2 and not latest.get("ti3"):
+                ti2_path = Path(str(ti2))
+                if ti2_path.exists():
+                    self._meas_page.load_ti2(ti2_path)
+
         self._update_ready_status()
-        self._go_to_state(self.STATE_READY)
+        self._gen_stack.setCurrentIndex(self.GEN_READY)
+        self.go_to_substep(self.SUB_GENERATE)
 
     def _apply_settings_to_ui(self, config: dict[str, Any]) -> None:
         """Populate the settings editor from a saved config dict."""
@@ -536,6 +627,7 @@ class OptimisePage(QWidget):
         self._nb_check.setVisible(instr == "i1")
         self._options_placeholder.setVisible(instr not in ("CM", "i1"))
         self._update_summary()
+        self._refresh_cmd_preview()
 
     def _update_summary(self) -> None:
         from .generate_page import _PATCHES_PER_PAGE
@@ -578,11 +670,33 @@ class OptimisePage(QWidget):
             return 21 if pages == 1 else 51
         return 51 if pages == 1 else 128
 
+    def _refresh_cmd_preview(self) -> None:
+        if not self._install:
+            self._cmd_preview.setPlainText("(argyllcms not found)")
+            return
+        pass_num = len(self._optimisation_passes) + 1
+        name = str(self._pass_target_stem(pass_num).name)
+        instr = self._instr_combo.currentData() or "i1"
+        paper = self._paper_combo.currentData() or "A3"
+        dd = self._dd_check.isChecked() and instr == "CM"
+        nb = self._nb_check.isChecked() and instr == "i1"
+        args = ["-v", f"-i{instr}", "-t300"]
+        if dd:
+            args.append("-h")
+        if nb:
+            args.append("-L")
+        if paper == "A3+":
+            args.extend(["-p483x329", name])
+        else:
+            args.extend([f"-p{paper}", name])
+        cmd = f"$ {self._install.printtarg} {' '.join(shlex.quote(a) for a in args)}"
+        self._cmd_preview.setPlainText(cmd)
+
     def _update_ready_status(self) -> None:
         pass_count = len(self._optimisation_passes)
         latest_icc = self._latest_icc_path()
         if pass_count == 0:
-            text = "Original profile ready. Ready to generate first add-on chart."
+            text = ""
             # Seed chart settings from the original generation config
             instr = self._generate_config.get("device", "i1")
             paper = self._generate_config.get("paper", "A3")
@@ -601,11 +715,13 @@ class OptimisePage(QWidget):
             self._pages_spin.setValue(1)
             self._update_summary()
         else:
+            label = "pass" if pass_count == 1 else "passes"
             text = (
-                f"{pass_count} optimisation pass(es) complete.\n"
+                f"{pass_count} optimisation {label} complete.\n"
                 f"Latest profile: {latest_icc}"
             )
         self._status_label.setText(text)
+        self._status_label.setVisible(bool(text))
         self._build_profile_btn.setEnabled(False)
         self._generate_addon_btn.setEnabled(True)
         # Lock the instrument to the original device category
@@ -698,11 +814,12 @@ class OptimisePage(QWidget):
             return
         out_ti1 = target.with_suffix(".ti1")
 
-        self._gen_status.setText("Generating add-on chart…")
-        self._go_to_state(self.STATE_GENERATING)
-        self._console.clear()
-        self._show_console_check.setVisible(True)
-        self._show_console_check.setChecked(True)
+        self._gen_status.setText("Generating add-on chart\u2026")
+        self._gen_status.setVisible(True)
+        self._generate_addon_btn.setVisible(False)
+        self._gen_console.clear()
+        self._show_gen_console.setVisible(True)
+        self._show_gen_console.setChecked(True)
 
         printtarg_args = ["-v", f"-i{instr}", "-t300"]
         if dd:
@@ -718,20 +835,8 @@ class OptimisePage(QWidget):
         self._pending_target = target
         self._pending_pass_num = pass_num
 
-        # Progress dialog (modal, no cancel)
-        progress = QProgressDialog("Generating optimisation chart...", None, 0, 5, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setAutoClose(True)
-        progress.setAutoReset(True)
-        progress.setCancelButton(None)
-        progress.show()
-
         try:
             from ...profiling import pass2_generator
-
-            def _on_progress(label: str, current: int, total: int) -> None:
-                progress.setLabelText(f"Generating optimisation chart... ({label})")
-                progress.setValue(current)
 
             pass2_generator.generate_pass2_ti1(
                 precond_icc=precond_icc,
@@ -739,21 +844,17 @@ class OptimisePage(QWidget):
                 out_ti1=out_ti1,
                 target_n=target_n,
                 xicclu_path=self._install.xicclu,
-                progress_callback=_on_progress,
             )
         except Exception as e:
-            progress.close()
             self._gen_status.setText(f"Chart generation failed: {e}")
-            self._console.append_line(f"Error: {e}")
-            self._go_to_state(self.STATE_READY)
+            self._gen_console.append_line(f"Error: {e}")
+            self._generate_addon_btn.setVisible(True)
             return
-
-        progress.close()
 
         # Launch printtarg
         work_dir = str(target.parent)
-        self._console.append_line(f"cd {work_dir}")
-        self._console.append_line(
+        self._gen_console.append_line(f"cd {work_dir}")
+        self._gen_console.append_line(
             f"$ {self._install.printtarg} "
             f"{' '.join(shlex.quote(a) for a in printtarg_args)}"
         )
@@ -769,13 +870,16 @@ class OptimisePage(QWidget):
         if not self._proc:
             return
         data = bytes(self._proc.readAllStandardOutput()).decode("utf-8", "ignore")
+        dst = self._gen_console if self._stack.currentIndex() == self.SUB_GENERATE else self._prof_console
         for line in data.splitlines():
-            self._console.append_line(line)
+            dst.append_line(line)
 
-    def _on_printtarg_done(self, code: int) -> None:
+    def _on_printtarg_done(self, code: int, _status) -> None:
         self._proc = None
         if code != 0:
             self._gen_status.setText("Chart generation failed (printtarg).")
+            self._gen_console.append_line("printtarg exited with non-zero status.")
+            self._generate_addon_btn.setVisible(True)
             return
 
         target = self._pending_target
@@ -789,15 +893,19 @@ class OptimisePage(QWidget):
             "icc": None,
         }
         self._optimisation_passes.append(pass_data)
+        self._opt_meas_done = False
 
         # Let the wizard know about the newly generated charts (copy,
         # list, show dialog). Must happen before the measurement
         # transition so the modal dialog blocks until user clicks OK.
         self.passChartsGenerated.emit(ti2_path, self._pending_pass_num)
 
-        # Switch to measurement
+        # Load the ti2 into the measurement page
         self._meas_page.load_ti2(ti2_path)
-        self._go_to_state(self.STATE_MEASURE)
+
+        # Return to the form (like the main Generate page)
+        self._gen_status.setVisible(False)
+        self._generate_addon_btn.setVisible(True)
 
     # ----------------------------------------------------------- measurement
 
@@ -805,10 +913,12 @@ class OptimisePage(QWidget):
         """Called when the embedded MeasurementPage finishes reading."""
         if not self._optimisation_passes:
             return
+        self._opt_meas_done = True
         self._optimisation_passes[-1]["ti3"] = ti3_path
         self._build_profile_btn.setEnabled(True)
-        self._go_to_state(self.STATE_READY)
-        self._update_ready_status()
+        self._prof_stack.setCurrentIndex(self.PROF_READY)
+        self.go_to_substep(self.SUB_PROFILE)
+        self.optMeasurementsComplete.emit(ti3_path)
 
     # ----------------------------------------------------------- build profile
 
@@ -842,19 +952,19 @@ class OptimisePage(QWidget):
         target = self._pass_target_stem(pass_num)
         combined = target.parent / f"{target.stem}_combined{pass_num}.ti3"
 
-        self._build_status.setText("Combining measurements…")
-        self._go_to_state(self.STATE_BUILDING)
-        self._console.clear()
-        self._show_console_check.setVisible(True)
-        self._show_console_check.setChecked(True)
+        self._build_status.setText("Combining measurements\u2026")
+        self._prof_stack.setCurrentIndex(self.PROF_BUILDING)
+        self._prof_console.clear()
+        self._show_prof_console.setVisible(True)
+        self._show_prof_console.setChecked(True)
 
         try:
             ti3_combiner.combine_all(sources, combined)
             self._combined_ti3s.append(combined)
-            self._console.append_line(f"Combined {len(sources)} measurement files → {combined}")
+            self._prof_console.append_line(f"Combined {len(sources)} measurement files → {combined}")
         except Exception as e:
             self._build_status.setText(f"Combination failed: {e}")
-            self._console.append_line(f"Error: {e}")
+            self._prof_console.append_line(f"Error: {e}")
             return
 
         # Build profile
@@ -862,7 +972,7 @@ class OptimisePage(QWidget):
         # Store settings for this pass
         self._profile_configs.append(settings)
 
-        self._build_status.setText("Creating optimised profile…")
+        self._build_status.setText("Creating optimised profile\u2026")
 
         work_dir = str(combined.parent)
         name = combined.stem
@@ -892,7 +1002,7 @@ class OptimisePage(QWidget):
 
         args.append(name)
 
-        self._console.append_line(
+        self._prof_console.append_line(
             f"$ {self._install.colprof} {' '.join(shlex.quote(a) for a in args)}"
         )
 
@@ -903,10 +1013,12 @@ class OptimisePage(QWidget):
         self._proc.readyReadStandardOutput.connect(self._on_proc_stdout)
         self._proc.start(str(self._install.colprof), args)
 
-    def _on_profile_done(self, code: int) -> None:
+    def _on_profile_done(self, code: int, _status) -> None:
         self._proc = None
         if code != 0:
             self._build_status.setText("Profile creation failed.")
+            self._build_profile_btn.setEnabled(True)
+            self._prof_stack.setCurrentIndex(self.PROF_READY)
             return
 
         pass_num = len(self._optimisation_passes)
@@ -915,14 +1027,17 @@ class OptimisePage(QWidget):
 
         self._optimisation_passes[-1]["icc"] = icc_path
         self._done_path_label.setText(str(icc_path))
-        self._go_to_state(self.STATE_DONE)
+        self._show_prof_console.setVisible(False)
+        self._prof_stack.setCurrentIndex(self.PROF_DONE)
         self.optimisationComplete.emit(icc_path)
 
-    # ----------------------------------------------------------- again
+    # ----------------------------------------------------------- embedded meas stop
 
-    def _on_optimise_again(self) -> None:
-        self._update_ready_status()
-        self._go_to_state(self.STATE_READY)
+    def _on_embedded_meas_stopped(self) -> None:
+        if self._opt_meas_done:
+            self._opt_meas_done = False
+            return
+        self.optMeasurementStopped.emit()
 
     # ----------------------------------------------------------- snapshot
 

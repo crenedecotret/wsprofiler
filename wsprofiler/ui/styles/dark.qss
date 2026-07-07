@@ -430,8 +430,8 @@ QMessageBox QLabel {
     color: #e0e0e8;
 }
 
-/* --- ListBox ------------------------------------------------------------- */
-QListWidget {
+/* --- TreeView (sidebar) -------------------------------------------------- */
+QTreeWidget {
     background-color: #141820;
     color: #e0e0e8;
     border: 1px solid #2a2f3e;
@@ -440,32 +440,45 @@ QListWidget {
     outline: none;
 }
 
-QListWidget::item {
+QTreeWidget::item {
     padding: 8px 12px;
     border-radius: 4px;
     margin: 1px 2px;
 }
 
-QListWidget::item:selected {
+QTreeWidget::item:selected {
     background-color: #4A9B8E;
     color: #ffffff;
 }
 
-QListWidget::item:hover:!selected {
+QTreeWidget::item:hover:!selected {
     background-color: #2a3042;
 }
 
-QListWidget::item:alternate {
+QTreeWidget::item:alternate {
     background-color: #161a24;
 }
 
-QListWidget::item:disabled {
+QTreeWidget::item:disabled {
     color: #555a6e;
     background-color: transparent;
 }
 
-QListWidget::item:disabled:hover {
+QTreeWidget::item:disabled:hover {
     background-color: transparent;
+}
+
+/* Branch area — match sidebar background so no gray block shows on selected rows */
+QTreeWidget::branch {
+    background-color: #141820;
+}
+
+/* Suppress all expand/collapse arrow icons */
+QTreeWidget::branch:has-children:!has-siblings:closed,
+QTreeWidget::branch:closed:has-children:has-siblings,
+QTreeWidget::branch:open:has-children:!has-siblings,
+QTreeWidget::branch:open:has-children:has-siblings {
+    border-image: none;
 }
 
 /* --- Menu ---------------------------------------------------------------- */
